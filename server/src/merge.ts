@@ -16,6 +16,27 @@ const NAME_ALIASES: Record<string, string> = {
   courgette: "zucchini",
   aubergine: "eggplant",
   capsicum: "bell pepper",
+  // Color/size variants of onion that should still merge into one shopping-list line
+  // unless a recipe truly depends on the variety (the vision prompt tries to normalize
+  // these too, but that isn't 100% reliable, so we also normalize here).
+  "yellow onion": "onion",
+  "yellow onions": "onion",
+  "white onion": "onion",
+  "white onions": "onion",
+  "red onion": "onion",
+  "red onions": "onion",
+  "sweet onion": "onion",
+  "sweet onions": "onion",
+  "brown onion": "onion",
+  "brown onions": "onion",
+  "vidalia onion": "onion",
+  "vidalia onions": "onion",
+  "small onion": "onion",
+  "small onions": "onion",
+  "medium onion": "onion",
+  "medium onions": "onion",
+  "large onion": "onion",
+  "large onions": "onion",
 };
 
 function singularize(word: string): string {

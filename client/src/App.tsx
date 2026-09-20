@@ -18,6 +18,13 @@ function formatQuantity(item: { quantity: number | null; unit: string | null }):
   return parts.join(" ");
 }
 
+// The grocery list view just needs "how many to grab" — the unit (cups, oz, etc.) is dropped
+// there since it isn't useful while shopping and was cluttering the line. Recipe cards still
+// use formatQuantity() above so the original extracted amounts stay visible for reference.
+function formatListQuantity(item: { quantity: number | null }): string {
+  return item.quantity !== null ? String(item.quantity) : "";
+}
+
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
@@ -110,6 +117,9 @@ export default function App() {
   const [manualQty, setManualQty] = useState("");
   const [manualUnit, setManualUnit] = useState("");
   const [manualAisle, setManualAisle] = useState<Aisle>(AISLES[0]);
+  const [dragY, setDragY] = useState(0);
+  const dragStartY = useRef<number | null>(null);
+  const dragging = useRef(false);
 
   useEffect(() => {
     saveList(list);
@@ -278,6 +288,34 @@ export default function App() {
   function goTo(v: View) {
     setView(v);
     setSheetOpen(false);
+  }
+
+  function closeSheet() {
+    setSheetOpen(false);
+    setDragY(0);
+  }
+
+  // Lets the Quick Access sheet be dragged down and dismissed with a swipe, instead of
+  // only being closeable by tapping the dark overlay behind it.
+  function handleSheetTouchStart(e: React.TouchEvent) {
+    dragStartY.current = e.touches[0].clientY;
+    dragging.current = true;
+  }
+
+  function handleSheetTouchMove(e: React.TouchEvent) {
+    if (!dragging.current || dragStartY.current === null) return;
+    const delta = e.touches[0].clientY - dragStartY.current;
+    if (delta > 0) setDragY(delta);
+  }
+
+  function handleSheetTouchEnd() {
+    if (dragging.current && dragY > 80) {
+      closeSheet();
+    } else {
+      setDragY(0);
+    }
+    dragging.current = false;
+    dragStartY.current = null;
   }
 
   return (
@@ -519,7 +557,7 @@ export default function App() {
                               <input type="checkbox" checked={item.checked} onChange={() => toggleChecked(item.id)} />
                               <span className="item-text">
                                 <span className="item-name">{item.name}</span>
-                                {formatQuantity(item) && <span className="item-qty"> — {formatQuantity(item)}</span>}
+                                {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
                                 {item.note && <span className="item-note"> ({item.note})</span>}
                                 {item.sourceRecipes.length > 1 && (
                                   <span className="shared-badge">
@@ -686,8 +724,15 @@ export default function App() {
 
       {/* ---------------- QUICK ACCESS SHEET ---------------- */}
       {sheetOpen && (
-        <div className="sheet-overlay" onClick={() => setSheetOpen(false)}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-overlay" onClick={closeSheet}>
+          <div
+            className="sheet"
+            style={{ transform: `translateY(${dragY}px)`, transition: dragging.current ? "none" : "transform 0.2s ease" }}
+            onClick={(e) => e.stopPropagation()}
+            onTouchStart={handleSheetTouchStart}
+            onTouchMove={handleSheetTouchMove}
+            onTouchEnd={handleSheetTouchEnd}
+          >
             <div className="sheet-handle" />
             <div className="sheet-title">Quick Access</div>
             <div className="sheet-subtitle">Jump to your list or recipes, or send this list elsewhere</div>
@@ -755,7 +800,7 @@ export default function App() {
               </button>
             </div>
 
-            <button className="sheet-cancel" onClick={() => setSheetOpen(false)}>
+            <button className="sheet-cancel" onClick={closeSheet}>
               Cancel
             </button>
           </div>

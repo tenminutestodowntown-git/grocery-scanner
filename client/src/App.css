@@ -373,14 +373,20 @@ body {
 }
 
 .item-text {
-  font-size: 1rem;
-  line-height: 1.35;
+  font-size: 1.08rem;
+  line-height: 1.4;
   word-break: break-word;
   display: block;
 }
 
 .item-name {
   font-weight: 500;
+}
+
+.item-label {
+  /* Give the text room to breathe — a full-width row was making the wrapped text
+     look small/cramped even though the font size itself was fine. */
+  max-width: calc(100% - 6px);
 }
 
 .item-qty {
@@ -419,8 +425,8 @@ body {
 
 .recipe-chip {
   flex-shrink: 0;
-  padding: 6px 13px;
-  font-size: 12px;
+  padding: 7px 14px;
+  font-size: 13.5px;
   font-weight: 600;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -496,11 +502,11 @@ body {
 .recipe-source-row {
   display: flex;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .recipe-source-input {
-  flex: 1;
+  flex: 3 1 0;
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -508,10 +514,13 @@ body {
   font-family: inherit;
   color: var(--text);
   background: var(--bg);
+  text-align: left;
 }
 
 .recipe-source-input-page {
-  flex: 0 0 80px;
+  /* Page numbers are rarely more than 3 digits, so this field stays noticeably
+     narrower than the cookbook-name field above. */
+  flex: 0 0 56px;
 }
 
 .shared-badge {
@@ -586,7 +595,8 @@ body {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 14px;
-  padding: 12px;
+  padding: 14px;
+  text-align: left;
 }
 
 .recipe-card-heading {
@@ -594,7 +604,7 @@ body {
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .recipe-name {
@@ -603,6 +613,7 @@ body {
   word-break: break-word;
   margin: 0;
   line-height: 1.3;
+  text-align: left;
 }
 
 .recipe-photo {
@@ -617,21 +628,28 @@ body {
 .recipe-card-footer {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--divider);
+  text-align: left;
 }
 
 .recipe-meta {
   font-size: 0.8rem;
   color: var(--muted-2);
+  text-align: left;
 }
 
 .recipe-card-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 4px;
+  margin-top: 0;
+  width: 100%;
 }
 
 .star-button {
@@ -666,6 +684,7 @@ body {
   font-size: 0.88rem;
   padding: 4px 0;
   line-height: 1.4;
+  text-align: left;
 }
 
 .extracted-aisle {
@@ -709,12 +728,12 @@ body {
 }
 
 .pill-title {
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .pill-status {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--muted-2);
 }
 
@@ -735,7 +754,7 @@ body {
   align-items: center;
   gap: 7px;
   padding: 10px 18px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -757,6 +776,7 @@ body {
   border-radius: 20px 20px 0 0;
   box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.18);
   padding: 14px 22px 26px;
+  touch-action: none;
 }
 
 .sheet-handle {
