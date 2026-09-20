@@ -430,7 +430,7 @@ export default function App() {
                   goTo("recipes");
                 }}
               >
-                <IconBook color="#333" /> Recipes
+                <IconBook color="currentColor" /> Recipes
               </button>
               <button
                 className="pill-chip"
@@ -439,13 +439,13 @@ export default function App() {
                   goTo("recipes");
                 }}
               >
-                <IconStar color="#333" /> Favorites
+                <IconStar color="currentColor" /> Favorites
               </button>
             </div>
           </header>
 
           <button className="add-another-pill" onClick={openScanner} disabled={status.kind === "scanning"}>
-            <IconCamera color="#333" />
+            <IconCamera color="currentColor" />
             {status.kind === "scanning" ? "Working…" : "Add another recipe"}
           </button>
 
@@ -753,7 +753,7 @@ export default function App() {
                   goTo("recipes");
                 }}
               >
-                <IconBook color="#333" />
+                <IconBook color="currentColor" />
                 <span className="sheet-nav-text">Your Recipes</span>
                 <IconChevronRight />
               </button>
@@ -764,7 +764,7 @@ export default function App() {
                   goTo("recipes");
                 }}
               >
-                <IconStar color="#333" />
+                <IconStar color="currentColor" />
                 <span className="sheet-nav-text">Favorites</span>
                 <IconChevronRight />
               </button>
