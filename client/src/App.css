@@ -397,6 +397,123 @@ body {
   color: var(--muted-2);
 }
 
+.item-source {
+  display: block;
+  font-size: 11px;
+  color: var(--muted-2);
+  margin-top: 2px;
+}
+
+.recipe-chip-row {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  margin-bottom: 14px;
+  scrollbar-width: none;
+}
+
+.recipe-chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+.recipe-chip {
+  flex-shrink: 0;
+  padding: 6px 13px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.recipe-chip-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.manual-add-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.manual-input {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.manual-input-name {
+  flex: 1 1 100%;
+}
+
+.manual-input-qty {
+  flex: 1 1 70px;
+  width: 70px;
+}
+
+.manual-input-unit {
+  flex: 1 1 90px;
+  width: 90px;
+}
+
+.manual-input-aisle {
+  flex: 1 1 140px;
+}
+
+.manual-add-actions {
+  flex: 1 1 100%;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.secondary-button.primary-ish {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.secondary-button.primary-ish:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.recipe-source-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.recipe-source-input {
+  flex: 1;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.recipe-source-input-page {
+  flex: 0 0 80px;
+}
+
 .shared-badge {
   display: inline-flex;
   align-items: center;
@@ -561,7 +678,10 @@ body {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 16px;
+  /* Nudged up from 16px so it clears the "Powered by Netlify" badge some free-tier
+     deploys show in the bottom-right corner. Remove/lower this once that badge is
+     turned off (Netlify project settings) or once this ships as a native app. */
+  bottom: 56px;
   z-index: 20;
   display: flex;
   align-items: stretch;

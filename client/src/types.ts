@@ -67,4 +67,10 @@ export interface Recipe {
   ingredients: ParsedIngredient[];
   favorite: boolean;
   createdAt: number;
+  cookbookName?: string;
+  pageNumber?: string;
 }
+
+// The name used for the synthetic "recipe" a manually-typed ingredient is attributed to,
+// so it flows through the same merge/contribution/remove machinery as a scanned recipe.
+export const MANUAL_ENTRY_SOURCE = "Manually added";

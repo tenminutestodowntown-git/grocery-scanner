@@ -2,3 +2,4 @@ node_modules/
 then dist/
 then .env
 then *.local
+*.zip

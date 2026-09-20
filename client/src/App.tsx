@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
-import { AISLES } from "./types";
-import type { Ingredient, Recipe } from "./types";
+import { AISLES, MANUAL_ENTRY_SOURCE } from "./types";
+import type { Aisle, Ingredient, Recipe } from "./types";
 import { loadList, saveList, loadRecipes, saveRecipes } from "./storage";
 import { scanRecipePhoto, mergeRecipeIntoList, removeRecipeFromList as removeRecipeFromListApi } from "./api";
 import { shareOrCopyList, downloadListAsText } from "./export";
@@ -104,6 +104,12 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [recipeChips, setRecipeChips] = useState<Set<string>>(new Set());
+  const [addItemOpen, setAddItemOpen] = useState(false);
+  const [manualName, setManualName] = useState("");
+  const [manualQty, setManualQty] = useState("");
+  const [manualUnit, setManualUnit] = useState("");
+  const [manualAisle, setManualAisle] = useState<Aisle>(AISLES[0]);
 
   useEffect(() => {
     saveList(list);
@@ -212,6 +218,42 @@ export default function App() {
     }
   }
 
+  async function handleManualAdd() {
+    const name = manualName.trim();
+    if (!name) return;
+    setStatus({ kind: "scanning" });
+    try {
+      const qty = manualQty.trim() ? Number(manualQty.trim()) : null;
+      const result = await mergeRecipeIntoList(
+        [{ name, quantity: Number.isFinite(qty) ? qty : null, unit: manualUnit.trim() || null, note: null, aisle: manualAisle }],
+        MANUAL_ENTRY_SOURCE,
+        list
+      );
+      setList(result.list);
+      setStatus({ kind: "idle" });
+      setToast(`Added "${name}"`);
+      setManualName("");
+      setManualQty("");
+      setManualUnit("");
+      setAddItemOpen(false);
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Something went wrong" });
+    }
+  }
+
+  function updateRecipeMeta(id: string, field: "cookbookName" | "pageNumber", value: string) {
+    setRecipes((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  }
+
+  function toggleRecipeChip(name: string) {
+    setRecipeChips((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }
+
   async function removeRecipeFromCurrentList(recipe: Recipe) {
     setStatus({ kind: "scanning" });
     try {
@@ -230,6 +272,8 @@ export default function App() {
   const recipeNamesInList = new Set(list.flatMap((item) => item.sourceRecipes));
   const favoriteCount = recipes.filter((r) => r.favorite).length;
   const pillLabel = totalCount === 0 ? "Empty" : `${totalCount} item${totalCount === 1 ? "" : "s"}`;
+  const recipeNamesInCurrentList = Array.from(new Set(list.flatMap((item) => item.sourceRecipes))).sort();
+  const displayedList = recipeChips.size === 0 ? list : list.filter((item) => item.sourceRecipes.some((n) => recipeChips.has(n)));
 
   function goTo(v: View) {
     setView(v);
@@ -391,12 +435,79 @@ export default function App() {
                   <button onClick={clearAll} className="secondary-button danger">
                     Clear all
                   </button>
+                  <button onClick={() => setAddItemOpen((v) => !v)} className="secondary-button">
+                    + Add item
+                  </button>
                 </div>
               </div>
 
+              {addItemOpen && (
+                <div className="manual-add-card">
+                  <input
+                    className="manual-input manual-input-name"
+                    placeholder="Ingredient name"
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value)}
+                    autoFocus
+                  />
+                  <input
+                    className="manual-input manual-input-qty"
+                    placeholder="Qty"
+                    inputMode="decimal"
+                    value={manualQty}
+                    onChange={(e) => setManualQty(e.target.value)}
+                  />
+                  <input
+                    className="manual-input manual-input-unit"
+                    placeholder="Unit"
+                    value={manualUnit}
+                    onChange={(e) => setManualUnit(e.target.value)}
+                  />
+                  <select
+                    className="manual-input manual-input-aisle"
+                    value={manualAisle}
+                    onChange={(e) => setManualAisle(e.target.value as Aisle)}
+                  >
+                    {AISLES.map((a) => (
+                      <option key={a} value={a}>
+                        {a}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="manual-add-actions">
+                    <button className="secondary-button" onClick={() => setAddItemOpen(false)}>
+                      Cancel
+                    </button>
+                    <button className="secondary-button primary-ish" onClick={handleManualAdd} disabled={!manualName.trim()}>
+                      Add
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {recipeNamesInCurrentList.length > 0 && (
+                <div className="recipe-chip-row">
+                  <button
+                    className={`recipe-chip ${recipeChips.size === 0 ? "recipe-chip-active" : ""}`}
+                    onClick={() => setRecipeChips(new Set())}
+                  >
+                    All
+                  </button>
+                  {recipeNamesInCurrentList.map((name) => (
+                    <button
+                      key={name}
+                      className={`recipe-chip ${recipeChips.has(name) ? "recipe-chip-active" : ""}`}
+                      onClick={() => toggleRecipeChip(name)}
+                    >
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="grocery-list">
                 {AISLES.map((aisle) => {
-                  const items = list.filter((i) => i.aisle === aisle);
+                  const items = displayedList.filter((i) => i.aisle === aisle);
                   if (items.length === 0) return null;
                   return (
                     <section key={aisle} className="aisle-section">
@@ -419,6 +530,7 @@ export default function App() {
                                     {item.sourceRecipes.length} recipes
                                   </span>
                                 )}
+                                <span className="item-source">{item.sourceRecipes.join(", ")}</span>
                               </span>
                             </label>
                             <button className="remove-button" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.name}`}>
@@ -491,6 +603,21 @@ export default function App() {
                   </div>
 
                   <img src={recipe.photoDataUrl} alt={recipe.name} className="recipe-photo" />
+
+                  <div className="recipe-source-row">
+                    <input
+                      className="recipe-source-input"
+                      placeholder="Cookbook name"
+                      value={recipe.cookbookName ?? ""}
+                      onChange={(e) => updateRecipeMeta(recipe.id, "cookbookName", e.target.value)}
+                    />
+                    <input
+                      className="recipe-source-input recipe-source-input-page"
+                      placeholder="Page #"
+                      value={recipe.pageNumber ?? ""}
+                      onChange={(e) => updateRecipeMeta(recipe.id, "pageNumber", e.target.value)}
+                    />
+                  </div>
 
                   <div className="recipe-card-footer">
                     <span className="recipe-meta">
