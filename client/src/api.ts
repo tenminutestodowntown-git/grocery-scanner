@@ -1,4 +1,4 @@
-import type { Ingredient, MergeResponse, ParsedIngredient, ScanResponse } from "./types";
+import type { Ingredient, MergeResponse, ParsedIngredient, PantryScanResponse, ScanResponse } from "./types";
 
 // Empty by default: requests go to the same origin the page was loaded from (works from
 // any device on the network via the Vite dev server's /api proxy, see vite.config.ts).
@@ -11,6 +11,25 @@ export async function scanRecipePhoto(photo: Blob, currentList: Ingredient[]): P
   form.append("list", JSON.stringify(currentList));
 
   const res = await fetch(`${API_BASE}/api/scan`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Request failed: ${res.status}`);
+  }
+
+  return res.json();
+}
+
+/** Sends one or more fridge/pantry photos and gets back the grocery items spotted across all
+ * of them (deduplicated server-side). Doesn't touch the grocery list — purely a lookup. */
+export async function scanPantryPhotos(photos: Blob[]): Promise<PantryScanResponse> {
+  const form = new FormData();
+  photos.forEach((photo, idx) => form.append("photos", photo, `pantry-${idx}.jpg`));
+
+  const res = await fetch(`${API_BASE}/api/scan-pantry`, {
     method: "POST",
     body: form,
   });

@@ -74,3 +74,34 @@ export interface Recipe {
 // The name used for the synthetic "recipe" a manually-typed ingredient is attributed to,
 // so it flows through the same merge/contribution/remove machinery as a scanned recipe.
 export const MANUAL_ENTRY_SOURCE = "Manually added";
+
+// The name used for the synthetic "recipe" an item moved from My Kitchen back to the grocery
+// list is attributed to (see removeRecipeFromList/mergeIngredients machinery reuse).
+export const RAN_OUT_SOURCE = "Ran out — from your kitchen";
+
+// A single item tracked in "My Kitchen" — what's already in the fridge/pantry, kept separate
+// from the grocery list so it can be checked against new recipes and moved back to the list
+// when it runs out.
+export interface KitchenItem {
+  id: string;
+  name: string;
+  quantity: number | null;
+  unit: string | null;
+  aisle: Aisle;
+  // Set only for items that came from a pantry-photo scan and weren't clearly readable —
+  // absent for manually-added items or items added by checking something off the grocery list.
+  confidence?: "high" | "low";
+  addedAt: number;
+}
+
+export interface PantryScanItem {
+  name: string;
+  quantity: number | null;
+  unit: string | null;
+  aisle: string;
+  confidence: "high" | "low";
+}
+
+export interface PantryScanResponse {
+  items: PantryScanItem[];
+}

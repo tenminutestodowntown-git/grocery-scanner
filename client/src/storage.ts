@@ -1,7 +1,8 @@
-import type { Ingredient, Recipe } from "./types";
+import type { Ingredient, KitchenItem, Recipe } from "./types";
 
 const LIST_KEY = "grocery-scanner:list:v1";
 const RECIPES_KEY = "grocery-scanner:recipes:v1";
+const KITCHEN_KEY = "grocery-scanner:kitchen:v1";
 
 export function loadList(): Ingredient[] {
   try {
@@ -37,5 +38,23 @@ export function saveRecipes(recipes: Recipe[]): void {
   } catch {
     // Most likely the storage quota was hit (photos add up) — the newest recipe still
     // works for the current session, it just won't survive a reload.
+  }
+}
+
+export function loadKitchen(): KitchenItem[] {
+  try {
+    const raw = localStorage.getItem(KITCHEN_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+export function saveKitchen(kitchen: KitchenItem[]): void {
+  try {
+    localStorage.setItem(KITCHEN_KEY, JSON.stringify(kitchen));
+  } catch {
+    // Storage full or unavailable — fail silently, still works in-memory for this session.
   }
 }
