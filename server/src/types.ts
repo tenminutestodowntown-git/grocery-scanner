@@ -35,3 +35,17 @@ export interface ParseRecipeResponse {
   recipeName: string;
   ingredients: ParsedIngredient[];
 }
+
+// A single item spotted in a fridge/pantry photo. "confidence" is "low" when the model is
+// guessing from shape/color/packaging alone (no readable label) rather than being sure.
+export interface PantryItem {
+  name: string;
+  quantity: number | null;
+  unit: string | null;
+  aisle: string; // validated against AISLES before use
+  confidence: "high" | "low";
+}
+
+export interface ParsePantryResponse {
+  items: PantryItem[];
+}
