@@ -1,15 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
-import { AISLES, MANUAL_ENTRY_SOURCE } from "./types";
-import type { Aisle, Ingredient, Recipe } from "./types";
-import { loadList, saveList, loadRecipes, saveRecipes } from "./storage";
-import { scanRecipePhoto, mergeRecipeIntoList, removeRecipeFromList as removeRecipeFromListApi } from "./api";
+import { AISLES, MANUAL_ENTRY_SOURCE, RAN_OUT_SOURCE } from "./types";
+import type { Aisle, Ingredient, KitchenItem, Recipe } from "./types";
+import { loadList, saveList, loadRecipes, saveRecipes, loadKitchen, saveKitchen } from "./storage";
+import {
+  scanRecipePhoto,
+  scanPantryPhotos,
+  mergeRecipeIntoList,
+  removeRecipeFromList as removeRecipeFromListApi,
+} from "./api";
 import { shareOrCopyList, downloadListAsText } from "./export";
 import { resizeImage } from "./image";
 
 type Status = { kind: "idle" } | { kind: "scanning" } | { kind: "error"; message: string } | { kind: "done"; recipeName: string };
 type RecipeFilter = "all" | "favorites";
-type View = "home" | "list" | "recipes";
+type View = "home" | "list" | "recipes" | "kitchen" | "kitchenScan" | "kitchenReview";
 
 function formatQuantity(item: { quantity: number | null; unit: string | null }): string {
   const parts: string[] = [];
@@ -23,6 +28,15 @@ function formatQuantity(item: { quantity: number | null; unit: string | null }):
 // use formatQuantity() above so the original extracted amounts stay visible for reference.
 function formatListQuantity(item: { quantity: number | null }): string {
   return item.quantity !== null ? String(item.quantity) : "";
+}
+
+// A looser, client-side name match (vs. the server's fuller nameKey) used only for two
+// lightweight lookups: flagging a grocery-list item that's already in My Kitchen, and
+// avoiding duplicate My Kitchen entries when the same item gets added twice.
+function simpleNameKey(name: string): string {
+  const lower = name.trim().toLowerCase();
+  if (lower.length > 3 && lower.endsWith("s") && !lower.endsWith("ss")) return lower.slice(0, -1);
+  return lower;
 }
 
 function newId(): string {
@@ -92,6 +106,16 @@ function IconReminder({ color = "#c7c7cc" }: { color?: string }) {
     </svg>
   );
 }
+function IconFridge({ color = "#3f8f7f" }: { color?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="2.5" width="14" height="19" rx="2.2" />
+      <line x1="5" y1="9.5" x2="19" y2="9.5" />
+      <line x1="8" y1="5" x2="8" y2="7.3" />
+      <line x1="8" y1="12" x2="8" y2="14.3" />
+    </svg>
+  );
+}
 function IconTip({ color = "#3f8f7f" }: { color?: string }) {
   return (
     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -120,6 +144,10 @@ export default function App() {
   const [dragY, setDragY] = useState(0);
   const dragStartY = useRef<number | null>(null);
   const dragging = useRef(false);
+  const [kitchen, setKitchen] = useState<KitchenItem[]>(() => loadKitchen());
+  const [pantryPhotos, setPantryPhotos] = useState<{ blob: Blob; dataUrl: string }[]>([]);
+  const [pantryReview, setPantryReview] = useState<KitchenItem[]>([]);
+  const pantryFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     saveList(list);
@@ -128,6 +156,10 @@ export default function App() {
   useEffect(() => {
     saveRecipes(recipes);
   }, [recipes]);
+
+  useEffect(() => {
+    saveKitchen(kitchen);
+  }, [kitchen]);
 
   useEffect(() => {
     if (!toast) return;
@@ -170,7 +202,30 @@ export default function App() {
   }
 
   function toggleChecked(id: string) {
-    setList((prev) => prev.map((item) => (item.id === id ? { ...item, checked: !item.checked } : item)));
+    setList((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target) {
+        // Checking something off means you now have it — track it in My Kitchen so future
+        // recipes can flag it. Unchecking mirrors that (removes it again) so an accidental
+        // tap of the checkbox — or catching a mistaken check — cleanly undoes itself.
+        if (!target.checked) addToKitchenFromItem(target);
+        else removeFromKitchenByName(target.name);
+      }
+      return prev.map((item) => (item.id === id ? { ...item, checked: !item.checked } : item));
+    });
+  }
+
+  function removeFromKitchenByName(name: string) {
+    const key = simpleNameKey(name);
+    setKitchen((prev) => prev.filter((k) => simpleNameKey(k.name) !== key));
+  }
+
+  function addToKitchenFromItem(item: Ingredient) {
+    setKitchen((prev) => {
+      const key = simpleNameKey(item.name);
+      if (prev.some((k) => simpleNameKey(k.name) === key)) return prev; // already tracked
+      return [...prev, { id: newId(), name: item.name, quantity: item.quantity, unit: item.unit, aisle: item.aisle, addedAt: Date.now() }];
+    });
   }
 
   function removeItem(id: string) {
@@ -276,6 +331,125 @@ export default function App() {
     }
   }
 
+  function openPantryScanner() {
+    pantryFileInputRef.current?.click();
+  }
+
+  async function onPantryFileChosen(file: File) {
+    try {
+      const { blob, dataUrl } = await resizeImage(file);
+      setPantryPhotos((prev) => [...prev, { blob, dataUrl }]);
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Couldn't read that photo" });
+    }
+  }
+
+  function onPantryFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) onPantryFileChosen(file);
+    e.target.value = "";
+  }
+
+  function removePantryPhoto(idx: number) {
+    setPantryPhotos((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function submitPantryScan() {
+    if (pantryPhotos.length === 0) return;
+    setStatus({ kind: "scanning" });
+    try {
+      const result = await scanPantryPhotos(pantryPhotos.map((p) => p.blob));
+      setPantryReview(
+        result.items.map((item) => ({
+          id: newId(),
+          name: item.name,
+          quantity: item.quantity,
+          unit: item.unit,
+          aisle: (AISLES as readonly string[]).includes(item.aisle) ? (item.aisle as Aisle) : "Other",
+          confidence: item.confidence,
+          addedAt: Date.now(),
+        }))
+      );
+      setStatus({ kind: "idle" });
+      setView("kitchenReview");
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Something went wrong" });
+    }
+  }
+
+  function updatePantryReviewItem(id: string, field: "name" | "quantity", value: string | number | null) {
+    setPantryReview((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  }
+
+  function removePantryReviewItem(id: string) {
+    setPantryReview((prev) => prev.filter((item) => item.id !== id));
+  }
+
+  function addPantryReviewBlank() {
+    setPantryReview((prev) => [...prev, { id: newId(), name: "", quantity: null, unit: null, aisle: AISLES[0], addedAt: Date.now() }]);
+  }
+
+  function cancelKitchenReview() {
+    setPantryPhotos([]);
+    setPantryReview([]);
+    goTo("kitchen");
+  }
+
+  function saveKitchenReview() {
+    const validItems = pantryReview.filter((item) => item.name.trim());
+    setKitchen((prev) => {
+      const next = [...prev];
+      for (const item of validItems) {
+        const key = simpleNameKey(item.name);
+        const existingIdx = next.findIndex((k) => simpleNameKey(k.name) === key);
+        if (existingIdx >= 0) {
+          next[existingIdx] = {
+            ...next[existingIdx],
+            quantity: item.quantity ?? next[existingIdx].quantity,
+            unit: item.unit ?? next[existingIdx].unit,
+            confidence: item.confidence,
+            addedAt: Date.now(),
+          };
+        } else {
+          next.push({ ...item, name: item.name.trim() });
+        }
+      }
+      return next;
+    });
+    setPantryPhotos([]);
+    setPantryReview([]);
+    setToast("Saved to My Kitchen");
+    goTo("kitchen");
+  }
+
+  function clearKitchen() {
+    if (kitchen.length === 0) return;
+    if (confirm("Clear everything from My Kitchen? This can't be undone.")) {
+      setKitchen([]);
+    }
+  }
+
+  function deleteKitchenItem(id: string) {
+    setKitchen((prev) => prev.filter((item) => item.id !== id));
+  }
+
+  async function moveKitchenItemToList(item: KitchenItem) {
+    setStatus({ kind: "scanning" });
+    try {
+      const result = await mergeRecipeIntoList(
+        [{ name: item.name, quantity: item.quantity, unit: item.unit, note: null, aisle: item.aisle }],
+        RAN_OUT_SOURCE,
+        list
+      );
+      setList(result.list);
+      setKitchen((prev) => prev.filter((k) => k.id !== item.id));
+      setStatus({ kind: "idle" });
+      setToast(`Added "${item.name}" to your grocery list`);
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Something went wrong" });
+    }
+  }
+
   const totalCount = list.length;
   const checkedCount = list.filter((i) => i.checked).length;
   const visibleRecipes = recipeFilter === "favorites" ? recipes.filter((r) => r.favorite) : recipes;
@@ -284,6 +458,7 @@ export default function App() {
   const pillLabel = totalCount === 0 ? "Empty" : `${totalCount} item${totalCount === 1 ? "" : "s"}`;
   const recipeNamesInCurrentList = Array.from(new Set(list.flatMap((item) => item.sourceRecipes))).sort();
   const displayedList = recipeChips.size === 0 ? list : list.filter((item) => item.sourceRecipes.some((n) => recipeChips.has(n)));
+  const kitchenKeySet = new Set(kitchen.map((k) => simpleNameKey(k.name)));
 
   function goTo(v: View) {
     setView(v);
@@ -328,6 +503,14 @@ export default function App() {
         onChange={onFileInputChange}
         style={{ display: "none" }}
       />
+      <input
+        ref={pantryFileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={onPantryFileInputChange}
+        style={{ display: "none" }}
+      />
 
       {/* ---------------- HOME ---------------- */}
       {view === "home" && (
@@ -352,6 +535,17 @@ export default function App() {
 
           {status.kind === "error" && <p className="error-text">{status.message}</p>}
           {status.kind === "done" && <p className="success-text">Added ingredients from "{status.recipeName}"</p>}
+
+          <button className="pantry-cta" onClick={openPantryScanner} disabled={status.kind === "scanning"}>
+            <span className="pantry-cta-icon">
+              <IconFridge color="currentColor" />
+            </span>
+            <span className="pantry-cta-text">
+              <span className="pantry-cta-title">What's in my kitchen?</span>
+              <span className="pantry-cta-subtitle">Snap your shelves so we don't double up</span>
+            </span>
+            <IconChevronRight color="#c7c7cc" />
+          </button>
 
           <div className="shortcuts-label">SHORTCUTS</div>
           <div className="shortcuts-card">
@@ -388,6 +582,16 @@ export default function App() {
               <span className="shortcut-text">
                 <span className="shortcut-title">Favorites</span>
                 <span className="shortcut-sub">{favoriteCount === 0 ? "None starred yet" : `${favoriteCount} starred`}</span>
+              </span>
+              <IconChevronRight />
+            </button>
+            <button className="shortcut-row" onClick={() => goTo("kitchen")}>
+              <IconFridge color="#4a4a4a" />
+              <span className="shortcut-text">
+                <span className="shortcut-title">My Kitchen</span>
+                <span className="shortcut-sub">
+                  {kitchen.length === 0 ? "Nothing tracked yet" : `${kitchen.length} item${kitchen.length === 1 ? "" : "s"} on hand`}
+                </span>
               </span>
               <IconChevronRight />
             </button>
@@ -568,6 +772,15 @@ export default function App() {
                                     {item.sourceRecipes.length} recipes
                                   </span>
                                 )}
+                                {kitchenKeySet.has(simpleNameKey(item.name)) && (
+                                  <span className="kitchen-flag-badge">
+                                    <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#a8752f" strokeWidth="2.4">
+                                      <rect x="5" y="2.5" width="14" height="19" rx="2.2" />
+                                      <line x1="5" y1="9.5" x2="19" y2="9.5" />
+                                    </svg>
+                                    In your kitchen — check amount
+                                  </span>
+                                )}
                                 <span className="item-source">{item.sourceRecipes.join(", ")}</span>
                               </span>
                             </label>
@@ -696,6 +909,187 @@ export default function App() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- MY KITCHEN ---------------- */}
+      {view === "kitchen" && (
+        <div className="screen">
+          <header className="page-header">
+            <button className="back-link" onClick={() => goTo("home")} aria-label="Back home">
+              ‹
+            </button>
+            <h1>My Kitchen</h1>
+          </header>
+
+          <p className="subtitle">What's already in your fridge and pantry, so recipes can flag what you don't need to buy.</p>
+
+          <div className="kitchen-toolbar">
+            <button
+              className="secondary-button primary-ish"
+              onClick={() => {
+                setPantryPhotos([]);
+                goTo("kitchenScan");
+              }}
+            >
+              <IconCamera color="currentColor" /> Snap new pics
+            </button>
+            {kitchen.length > 0 && (
+              <button className="secondary-button danger" onClick={clearKitchen}>
+                Clear my kitchen
+              </button>
+            )}
+          </div>
+
+          {kitchen.length === 0 ? (
+            <div className="empty-state">
+              <p>Nothing tracked yet. Snap a photo of your fridge or pantry and we'll keep a running list of what you've got.</p>
+            </div>
+          ) : (
+            <div className="kitchen-list">
+              {kitchen
+                .slice()
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map((item) => (
+                  <div key={item.id} className="kitchen-row">
+                    <div className="kitchen-row-text">
+                      <span className="item-name">{item.name}</span>
+                      {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
+                      {item.confidence === "low" && <span className="confidence-badge">best guess</span>}
+                    </div>
+                    <div className="kitchen-row-actions">
+                      <button className="secondary-button" onClick={() => moveKitchenItemToList(item)}>
+                        Ran out — add to list
+                      </button>
+                      <button className="remove-button" onClick={() => deleteKitchenItem(item.id)} aria-label={`Remove ${item.name}`}>
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ---------------- KITCHEN PHOTO SCAN ---------------- */}
+      {view === "kitchenScan" && (
+        <div className="screen">
+          <header className="page-header">
+            <button
+              className="back-link"
+              onClick={() => {
+                setPantryPhotos([]);
+                goTo("kitchen");
+              }}
+              aria-label="Back"
+            >
+              ‹
+            </button>
+            <h1>What's in my kitchen?</h1>
+          </header>
+
+          <p className="subtitle">Snap a few photos — fridge, freezer, pantry shelf, wherever. We'll figure out what's in them.</p>
+
+          {pantryPhotos.length > 0 && (
+            <div className="pantry-photo-strip">
+              {pantryPhotos.map((p, idx) => (
+                <div key={idx} className="pantry-photo-thumb">
+                  <img src={p.dataUrl} alt={`Kitchen photo ${idx + 1}`} />
+                  <button className="pantry-photo-remove" onClick={() => removePantryPhoto(idx)} aria-label="Remove photo">
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button className="add-another-pill" onClick={openPantryScanner} disabled={status.kind === "scanning"}>
+            <IconCamera color="currentColor" />
+            {pantryPhotos.length === 0 ? "Take a photo" : "Add another photo"}
+          </button>
+
+          {status.kind === "error" && <p className="error-text">{status.message}</p>}
+
+          <div className="kitchen-scan-actions">
+            <button
+              className="secondary-button"
+              onClick={() => {
+                setPantryPhotos([]);
+                goTo("kitchen");
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="secondary-button primary-ish"
+              onClick={submitPantryScan}
+              disabled={pantryPhotos.length === 0 || status.kind === "scanning"}
+            >
+              {status.kind === "scanning" ? "Looking…" : `Scan ${pantryPhotos.length} photo${pantryPhotos.length === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- KITCHEN SCAN REVIEW ---------------- */}
+      {view === "kitchenReview" && (
+        <div className="screen">
+          <header className="page-header">
+            <button className="back-link" onClick={cancelKitchenReview} aria-label="Back">
+              ‹
+            </button>
+            <h1>Check what we found</h1>
+          </header>
+
+          <p className="subtitle">Fix anything we got wrong, then save it to My Kitchen.</p>
+
+          <div className="kitchen-review-list">
+            {pantryReview.length === 0 && (
+              <p className="empty-state small">Nothing found — add items by hand below, or go back and snap another photo.</p>
+            )}
+            {pantryReview.map((item) => (
+              <div key={item.id} className="kitchen-review-row">
+                <input
+                  className="manual-input manual-input-name"
+                  placeholder="Item name"
+                  value={item.name}
+                  onChange={(e) => updatePantryReviewItem(item.id, "name", e.target.value)}
+                />
+                <input
+                  className="manual-input manual-input-qty"
+                  placeholder="Qty"
+                  inputMode="decimal"
+                  value={item.quantity ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    updatePantryReviewItem(item.id, "quantity", v.trim() === "" ? null : Number(v));
+                  }}
+                />
+                {item.confidence === "low" && <span className="confidence-badge">best guess</span>}
+                <button className="remove-button" onClick={() => removePantryReviewItem(item.id)} aria-label={`Remove ${item.name || "item"}`}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <button className="secondary-button" onClick={addPantryReviewBlank}>
+            + Add item
+          </button>
+
+          <div className="kitchen-scan-actions">
+            <button className="secondary-button" onClick={cancelKitchenReview}>
+              Cancel
+            </button>
+            <button
+              className="secondary-button primary-ish"
+              onClick={saveKitchenReview}
+              disabled={pantryReview.every((item) => !item.name.trim())}
+            >
+              Save to My Kitchen
+            </button>
           </div>
         </div>
       )}
