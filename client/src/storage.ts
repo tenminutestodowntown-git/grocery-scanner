@@ -1,8 +1,9 @@
-import type { Ingredient, KitchenItem, Recipe } from "./types";
+import type { Ingredient, KitchenItem, PantryPhoto, Recipe } from "./types";
 
 const LIST_KEY = "grocery-scanner:list:v1";
 const RECIPES_KEY = "grocery-scanner:recipes:v1";
 const KITCHEN_KEY = "grocery-scanner:kitchen:v1";
+const PANTRY_PHOTOS_KEY = "grocery-scanner:pantryPhotos:v1";
 
 export function loadList(): Ingredient[] {
   try {
@@ -56,5 +57,24 @@ export function saveKitchen(kitchen: KitchenItem[]): void {
     localStorage.setItem(KITCHEN_KEY, JSON.stringify(kitchen));
   } catch {
     // Storage full or unavailable — fail silently, still works in-memory for this session.
+  }
+}
+
+export function loadPantryPhotos(): PantryPhoto[] {
+  try {
+    const raw = localStorage.getItem(PANTRY_PHOTOS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+export function savePantryPhotos(photos: PantryPhoto[]): void {
+  try {
+    localStorage.setItem(PANTRY_PHOTOS_KEY, JSON.stringify(photos));
+  } catch {
+    // Storage full (photos add up fast) — fail silently; they still work for this session,
+    // they just won't survive a reload.
   }
 }

@@ -1,5 +1,7 @@
-const MAX_DIMENSION = 900;
-const JPEG_QUALITY = 0.75;
+// Bumped up from 900/0.75 — the vision model was missing some pantry items and ingredient
+// details on lower-res/heavier-compressed shots. Still well within reasonable upload size.
+const MAX_DIMENSION = 1200;
+const JPEG_QUALITY = 0.85;
 
 /**
  * Downscales/recompresses a photo before it's uploaded and before it's kept around as a
@@ -29,4 +31,16 @@ export async function resizeImage(file: File): Promise<{ blob: Blob; dataUrl: st
   });
 
   return { blob, dataUrl };
+}
+
+/** Reconstructs a Blob from a previously-saved dataUrl (e.g. a cached pantry photo pulled back
+ * out of localStorage), so it can be sent to the API without asking the user to retake it. */
+export function dataUrlToBlob(dataUrl: string): Blob {
+  const [header, base64] = dataUrl.split(",");
+  const mimeMatch = header.match(/data:(.*?);base64/);
+  const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
 }

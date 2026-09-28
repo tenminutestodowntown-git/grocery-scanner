@@ -331,6 +331,16 @@ body {
   font-size: 0.9rem;
 }
 
+.cookbook-confirm-text {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--accent-tip-bg);
+  color: var(--accent-tip-text);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
 .list-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -494,6 +504,30 @@ body {
   color: white;
 }
 
+.recipe-chip-wrap {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.recipe-chip-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
 .manual-add-card {
   display: flex;
   flex-wrap: wrap;
@@ -623,6 +657,48 @@ body {
   cursor: pointer;
   padding: 6px;
   flex-shrink: 0;
+}
+
+.edit-button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 6px;
+  flex-shrink: 0;
+}
+
+.item-row-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.item-row-editing,
+.kitchen-row-editing {
+  padding: 10px 0;
+}
+
+.kitchen-row-editing {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.inline-edit-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.inline-edit-actions {
+  flex: 1 1 100%;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .empty-state {
@@ -1093,6 +1169,36 @@ body {
   font-weight: 600;
   color: #333;
   cursor: pointer;
+}
+
+/* ---------- Shared big-ticket item confirmation modal ---------- */
+.meat-duplicate-modal {
+  width: calc(100% - 40px);
+  max-width: 420px;
+  margin: 0 auto;
+  background: var(--card);
+  border-radius: 18px;
+  padding: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.meat-duplicate-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.meat-duplicate-text {
+  font-size: 13.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+
+.meat-duplicate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .toast {

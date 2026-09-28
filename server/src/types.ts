@@ -34,6 +34,11 @@ export interface ParsedIngredient {
 export interface ParseRecipeResponse {
   recipeName: string;
   ingredients: ParsedIngredient[];
+  // If the cookbook's title and/or the page number are visibly printed on the page (running
+  // header/footer, spine text caught in frame, etc.), the model reports them here so the app
+  // can pre-fill those fields for the user to confirm. Null when not visible/legible.
+  cookbookName: string | null;
+  pageNumber: string | null;
 }
 
 // A single item spotted in a fridge/pantry photo. "confidence" is "low" when the model is

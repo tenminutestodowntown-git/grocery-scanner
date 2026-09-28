@@ -50,7 +50,13 @@ app.post("/api/scan", upload.single("photo"), async (req, res) => {
     // Return the raw per-recipe ingredients too, so the client can save this as a
     // reusable "recipe" (for the recipe-photo review view and favorites/re-add flow)
     // without needing to re-run the vision model later.
-    res.json({ recipeName: parsed.recipeName, ingredients: parsed.ingredients, list: merged });
+    res.json({
+      recipeName: parsed.recipeName,
+      cookbookName: parsed.cookbookName,
+      pageNumber: parsed.pageNumber,
+      ingredients: parsed.ingredients,
+      list: merged,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });

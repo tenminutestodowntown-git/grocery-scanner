@@ -25,9 +25,17 @@ ${AISLES.map((a) => `  - "${a}"`).join("\n")}
 Also return recipeName: a short human name for the recipe/dish (from the page title/heading if visible, otherwise a
 reasonable short description like "Page recipe" or infer from the ingredients, e.g. "Chicken stir-fry").
 
+Also look for the cookbook's title and the page number, if either is visibly printed on the page (e.g. a running
+header/footer with the book's name, a page number in a corner, cover/spine text caught in the same frame). Return
+them as cookbookName and pageNumber (pageNumber as a string, e.g. "236"). If either isn't visible or legible, use
+null for it rather than guessing — the user will be asked to confirm whatever you do return, so only report values
+you actually see printed.
+
 Respond with ONLY valid JSON matching this exact shape, no markdown fences, no commentary:
 {
   "recipeName": string,
+  "cookbookName": string | null,
+  "pageNumber": string | null,
   "ingredients": [
     { "name": string, "quantity": number | null, "unit": string | null, "note": string | null, "aisle": string }
   ]
@@ -83,6 +91,10 @@ export async function parseRecipeImage(
   if (!parsed.ingredients || !Array.isArray(parsed.ingredients)) {
     throw new Error("Model response missing ingredients array");
   }
+
+  // Defensive defaults in case the model omits these fields entirely.
+  if (parsed.cookbookName === undefined) parsed.cookbookName = null;
+  if (parsed.pageNumber === undefined) parsed.pageNumber = null;
 
   return parsed;
 }

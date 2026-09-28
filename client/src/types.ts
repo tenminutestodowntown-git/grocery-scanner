@@ -49,6 +49,8 @@ export interface ParsedIngredient {
 
 export interface ScanResponse {
   recipeName: string;
+  cookbookName: string | null;
+  pageNumber: string | null;
   ingredients: ParsedIngredient[];
   list: Ingredient[];
 }
@@ -104,4 +106,12 @@ export interface PantryScanItem {
 
 export interface PantryScanResponse {
   items: PantryScanItem[];
+}
+
+// A cached "what's in my kitchen" photo — stored as just its resized dataUrl so it survives
+// reloads/navigation in localStorage without re-holding a Blob (which can't be persisted).
+// Reconstructed into a Blob only at scan-submit time (see image.ts's dataUrlToBlob).
+export interface PantryPhoto {
+  id: string;
+  dataUrl: string;
 }

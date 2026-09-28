@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { AISLES, MANUAL_ENTRY_SOURCE, RAN_OUT_SOURCE } from "./types";
-import type { Aisle, Ingredient, KitchenItem, Recipe } from "./types";
-import { loadList, saveList, loadRecipes, saveRecipes, loadKitchen, saveKitchen } from "./storage";
+import type { Aisle, Ingredient, KitchenItem, PantryPhoto, Recipe } from "./types";
+import {
+  loadList,
+  saveList,
+  loadRecipes,
+  saveRecipes,
+  loadKitchen,
+  saveKitchen,
+  loadPantryPhotos,
+  savePantryPhotos,
+} from "./storage";
 import {
   scanRecipePhoto,
   scanPantryPhotos,
@@ -10,9 +19,13 @@ import {
   removeRecipeFromList as removeRecipeFromListApi,
 } from "./api";
 import { shareOrCopyList, downloadListAsText } from "./export";
-import { resizeImage } from "./image";
+import { resizeImage, dataUrlToBlob } from "./image";
 
-type Status = { kind: "idle" } | { kind: "scanning" } | { kind: "error"; message: string } | { kind: "done"; recipeName: string };
+type Status =
+  | { kind: "idle" }
+  | { kind: "scanning" }
+  | { kind: "error"; message: string }
+  | { kind: "done"; recipeName: string; cookbookName?: string | null; pageNumber?: string | null };
 type RecipeFilter = "all" | "favorites";
 type View = "home" | "list" | "recipes" | "kitchen" | "kitchenScan" | "kitchenReview";
 
@@ -37,6 +50,86 @@ function simpleNameKey(name: string): string {
   const lower = name.trim().toLowerCase();
   if (lower.length > 3 && lower.endsWith("s") && !lower.endsWith("ss")) return lower.slice(0, -1);
   return lower;
+}
+
+// Words that name a "type" of meat/seafood cut broadly enough that two differently-named
+// items sharing one (e.g. "Chuck roast" and "Pot roast") are very likely the same purchase
+// for two different recipes, not two genuinely different things to buy. Deliberately scoped
+// to the Meat & Seafood aisle only and to bigger-ticket items — a shared "1 onion" across two
+// recipes already just merges into one list line, so this is only for the case where the
+// vision model (correctly) kept two different-sounding cuts as separate lines.
+const MEAT_TYPE_WORDS = [
+  "roast",
+  "chicken",
+  "steak",
+  "salmon",
+  "shrimp",
+  "pork",
+  "turkey",
+  "brisket",
+  "ribs",
+  "beef",
+  "fish",
+  "bacon",
+  "sausage",
+  "ham",
+  "lamb",
+  "tenderloin",
+  "cod",
+  "tilapia",
+  "tuna",
+];
+
+function meatKeyword(name: string): string | null {
+  const lower = name.toLowerCase();
+  for (const w of MEAT_TYPE_WORDS) {
+    if (lower.includes(w)) return w;
+  }
+  return null;
+}
+
+/** Finds the first pair of Meat & Seafood list lines (not already dismissed) that come from
+ * different recipes but share the same broad "type" keyword — a likely case of the same cut
+ * getting bought twice because two recipes named it slightly differently. Returns at most one
+ * candidate at a time so only one prompt shows on screen at once. */
+function findMeatDuplicateCandidate(
+  items: Ingredient[],
+  dismissed: Set<string>
+): { a: Ingredient; b: Ingredient; keyword: string; pairKey: string } | null {
+  const meatItems = items.filter((i) => i.aisle === "Meat & Seafood");
+  for (let i = 0; i < meatItems.length; i++) {
+    for (let j = i + 1; j < meatItems.length; j++) {
+      const a = meatItems[i];
+      const b = meatItems[j];
+      if (a.name.trim().toLowerCase() === b.name.trim().toLowerCase()) continue; // already the same line
+      const kwA = meatKeyword(a.name);
+      const kwB = meatKeyword(b.name);
+      if (kwA && kwA === kwB) {
+        const pairKey = [a.id, b.id].sort().join("::");
+        if (!dismissed.has(pairKey)) return { a, b, keyword: kwA, pairKey };
+      }
+    }
+  }
+  return null;
+}
+
+/** Folds two distinct list lines into one — used when the user says two differently-named
+ * meat/seafood items are really the same purchase shared across recipes. Sums the quantity
+ * only when the units already match (rather than guessing at a conversion); otherwise keeps
+ * the first line's amount and notes the second's name so nothing is silently lost. */
+function combineTwoIngredients(a: Ingredient, b: Ingredient): Ingredient {
+  const sameUnit = a.unit === b.unit;
+  const quantity = sameUnit && a.quantity !== null && b.quantity !== null ? a.quantity + b.quantity : a.quantity ?? b.quantity;
+  const unit = sameUnit ? a.unit : a.unit ?? b.unit;
+  const noteBits = [a.note, b.note !== a.note ? `also "${b.name}"` : null].filter((n): n is string => !!n);
+  return {
+    ...a,
+    quantity,
+    unit,
+    note: noteBits.length > 0 ? noteBits.join("; ") : null,
+    sourceRecipes: Array.from(new Set([...a.sourceRecipes, ...b.sourceRecipes])),
+    contributions: [...a.contributions, ...b.contributions],
+  };
 }
 
 function newId(): string {
@@ -145,9 +238,29 @@ export default function App() {
   const dragStartY = useRef<number | null>(null);
   const dragging = useRef(false);
   const [kitchen, setKitchen] = useState<KitchenItem[]>(() => loadKitchen());
-  const [pantryPhotos, setPantryPhotos] = useState<{ blob: Blob; dataUrl: string }[]>([]);
+  const [pantryPhotos, setPantryPhotos] = useState<PantryPhoto[]>(() => loadPantryPhotos());
   const [pantryReview, setPantryReview] = useState<KitchenItem[]>([]);
   const pantryFileInputRef = useRef<HTMLInputElement>(null);
+  const [addKitchenItemOpen, setAddKitchenItemOpen] = useState(false);
+  const [manualKitchenName, setManualKitchenName] = useState("");
+  const [manualKitchenQty, setManualKitchenQty] = useState("");
+  const [manualKitchenUnit, setManualKitchenUnit] = useState("");
+  const [manualKitchenAisle, setManualKitchenAisle] = useState<Aisle>(AISLES[0]);
+  // Inline-edit drafts: while non-null, the matching row renders editable inputs instead of
+  // static text. Kept as a single draft object (not per-row state) since only one row is
+  // ever edited at a time.
+  const [listEditDraft, setListEditDraft] = useState<{ id: string; name: string; qty: string; unit: string } | null>(null);
+  const [kitchenEditDraft, setKitchenEditDraft] = useState<{
+    id: string;
+    name: string;
+    qty: string;
+    unit: string;
+    aisle: Aisle;
+  } | null>(null);
+  // Pairs of Meat & Seafood items (from different recipes) the user has already told us they
+  // want to buy separately — remembered per session so the same prompt doesn't nag them again
+  // right after they answer it once.
+  const [dismissedMeatPairs, setDismissedMeatPairs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     saveList(list);
@@ -160,6 +273,10 @@ export default function App() {
   useEffect(() => {
     saveKitchen(kitchen);
   }, [kitchen]);
+
+  useEffect(() => {
+    savePantryPhotos(pantryPhotos);
+  }, [pantryPhotos]);
 
   useEffect(() => {
     if (!toast) return;
@@ -181,10 +298,12 @@ export default function App() {
         ingredients: result.ingredients,
         favorite: false,
         createdAt: Date.now(),
+        cookbookName: result.cookbookName ?? undefined,
+        pageNumber: result.pageNumber ?? undefined,
       };
       setRecipes((prev) => [recipe, ...prev]);
 
-      setStatus({ kind: "done", recipeName: result.recipeName });
+      setStatus({ kind: "done", recipeName: result.recipeName, cookbookName: result.cookbookName, pageNumber: result.pageNumber });
       setView("list");
     } catch (err) {
       setStatus({ kind: "error", message: err instanceof Error ? err.message : "Something went wrong" });
@@ -244,14 +363,16 @@ export default function App() {
   }
 
   async function handleShare() {
-    if (list.length === 0) return;
-    const outcome = await shareOrCopyList(list);
+    // Respects whichever recipe chips are active — sharing should only include what's
+    // currently shown, not every recipe on the list regardless of filter.
+    if (displayedList.length === 0) return;
+    const outcome = await shareOrCopyList(displayedList);
     setToast(outcome === "shared" ? "Shared!" : "Copied to clipboard");
   }
 
   function handleDownload() {
-    if (list.length === 0) return;
-    downloadListAsText(list);
+    if (displayedList.length === 0) return;
+    downloadListAsText(displayedList);
   }
 
   function toggleFavorite(id: string) {
@@ -331,14 +452,35 @@ export default function App() {
     }
   }
 
+  // Same as above, but by name only — used by the recipe-chip "x" in the list view, where we
+  // have the chip's recipe name but not necessarily a saved Recipe object (manual entries and
+  // "ran out" additions are recipe-shaped too, but aren't in `recipes`).
+  async function removeRecipeByName(name: string) {
+    setStatus({ kind: "scanning" });
+    try {
+      const result = await removeRecipeFromListApi(name, list);
+      setList(result.list);
+      setRecipeChips((prev) => {
+        if (!prev.has(name)) return prev;
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+      setStatus({ kind: "idle" });
+      setToast(`Removed "${name}" from your list`);
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Something went wrong" });
+    }
+  }
+
   function openPantryScanner() {
     pantryFileInputRef.current?.click();
   }
 
   async function onPantryFileChosen(file: File) {
     try {
-      const { blob, dataUrl } = await resizeImage(file);
-      setPantryPhotos((prev) => [...prev, { blob, dataUrl }]);
+      const { dataUrl } = await resizeImage(file);
+      setPantryPhotos((prev) => [...prev, { id: newId(), dataUrl }]);
     } catch (err) {
       setStatus({ kind: "error", message: err instanceof Error ? err.message : "Couldn't read that photo" });
     }
@@ -350,15 +492,15 @@ export default function App() {
     e.target.value = "";
   }
 
-  function removePantryPhoto(idx: number) {
-    setPantryPhotos((prev) => prev.filter((_, i) => i !== idx));
+  function removePantryPhoto(id: string) {
+    setPantryPhotos((prev) => prev.filter((p) => p.id !== id));
   }
 
   async function submitPantryScan() {
     if (pantryPhotos.length === 0) return;
     setStatus({ kind: "scanning" });
     try {
-      const result = await scanPantryPhotos(pantryPhotos.map((p) => p.blob));
+      const result = await scanPantryPhotos(pantryPhotos.map((p) => dataUrlToBlob(p.dataUrl)));
       setPantryReview(
         result.items.map((item) => ({
           id: newId(),
@@ -370,6 +512,10 @@ export default function App() {
           addedAt: Date.now(),
         }))
       );
+      // The photos have now served their purpose — clear the cache so they don't stick
+      // around after being scanned (they stay cached, though, if the user navigates away
+      // without scanning, or cancels here without saving — see cancelKitchenReview).
+      setPantryPhotos([]);
       setStatus({ kind: "idle" });
       setView("kitchenReview");
     } catch (err) {
@@ -422,6 +568,96 @@ export default function App() {
     goTo("kitchen");
   }
 
+  function handleManualKitchenAdd() {
+    const name = manualKitchenName.trim();
+    if (!name) return;
+    const qtyNum = manualKitchenQty.trim() ? Number(manualKitchenQty.trim()) : null;
+    const quantity = qtyNum !== null && Number.isFinite(qtyNum) ? qtyNum : null;
+    const unit = manualKitchenUnit.trim() || null;
+
+    setKitchen((prev) => {
+      const key = simpleNameKey(name);
+      const existingIdx = prev.findIndex((k) => simpleNameKey(k.name) === key);
+      if (existingIdx >= 0) {
+        // Already tracked — combine rather than creating a duplicate row, same spirit as
+        // the grocery-list merge logic (sum when the unit matches, otherwise just top up
+        // the quantity/unit with whatever was just entered).
+        const next = [...prev];
+        const existing = next[existingIdx];
+        const sameUnit = existing.unit === unit;
+        const combinedQty =
+          sameUnit && existing.quantity !== null && quantity !== null ? existing.quantity + quantity : quantity ?? existing.quantity;
+        next[existingIdx] = { ...existing, quantity: combinedQty, unit: unit ?? existing.unit, addedAt: Date.now() };
+        return next;
+      }
+      return [...prev, { id: newId(), name, quantity, unit, aisle: manualKitchenAisle, addedAt: Date.now() }];
+    });
+
+    setToast(`Added "${name}" to My Kitchen`);
+    setManualKitchenName("");
+    setManualKitchenQty("");
+    setManualKitchenUnit("");
+    setAddKitchenItemOpen(false);
+  }
+
+  function startEditListItem(item: Ingredient) {
+    setListEditDraft({ id: item.id, name: item.name, qty: item.quantity !== null ? String(item.quantity) : "", unit: item.unit ?? "" });
+  }
+
+  function cancelEditListItem() {
+    setListEditDraft(null);
+  }
+
+  function saveEditListItem() {
+    if (!listEditDraft) return;
+    const trimmedName = listEditDraft.name.trim();
+    if (!trimmedName) return;
+    const qtyNum = listEditDraft.qty.trim() ? Number(listEditDraft.qty.trim()) : null;
+    setList((prev) =>
+      prev.map((item) =>
+        item.id === listEditDraft.id
+          ? { ...item, name: trimmedName, quantity: qtyNum !== null && Number.isFinite(qtyNum) ? qtyNum : null, unit: listEditDraft.unit.trim() || null }
+          : item
+      )
+    );
+    setListEditDraft(null);
+  }
+
+  function startEditKitchenItem(item: KitchenItem) {
+    setKitchenEditDraft({
+      id: item.id,
+      name: item.name,
+      qty: item.quantity !== null ? String(item.quantity) : "",
+      unit: item.unit ?? "",
+      aisle: item.aisle,
+    });
+  }
+
+  function cancelEditKitchenItem() {
+    setKitchenEditDraft(null);
+  }
+
+  function saveEditKitchenItem() {
+    if (!kitchenEditDraft) return;
+    const trimmedName = kitchenEditDraft.name.trim();
+    if (!trimmedName) return;
+    const qtyNum = kitchenEditDraft.qty.trim() ? Number(kitchenEditDraft.qty.trim()) : null;
+    setKitchen((prev) =>
+      prev.map((item) =>
+        item.id === kitchenEditDraft.id
+          ? {
+              ...item,
+              name: trimmedName,
+              quantity: qtyNum !== null && Number.isFinite(qtyNum) ? qtyNum : null,
+              unit: kitchenEditDraft.unit.trim() || null,
+              aisle: kitchenEditDraft.aisle,
+            }
+          : item
+      )
+    );
+    setKitchenEditDraft(null);
+  }
+
   function clearKitchen() {
     if (kitchen.length === 0) return;
     if (confirm("Clear everything from My Kitchen? This can't be undone.")) {
@@ -459,6 +695,19 @@ export default function App() {
   const recipeNamesInCurrentList = Array.from(new Set(list.flatMap((item) => item.sourceRecipes))).sort();
   const displayedList = recipeChips.size === 0 ? list : list.filter((item) => item.sourceRecipes.some((n) => recipeChips.has(n)));
   const kitchenKeySet = new Set(kitchen.map((k) => simpleNameKey(k.name)));
+  const meatDuplicateCandidate = findMeatDuplicateCandidate(list, dismissedMeatPairs);
+
+  function resolveMeatDuplicate(action: "separate" | "combine") {
+    if (!meatDuplicateCandidate) return;
+    const { a, b, pairKey } = meatDuplicateCandidate;
+    if (action === "separate") {
+      setDismissedMeatPairs((prev) => new Set(prev).add(pairKey));
+      return;
+    }
+    const combined = combineTwoIngredients(a, b);
+    setList((prev) => [...prev.filter((i) => i.id !== a.id && i.id !== b.id), combined]);
+    setToast(`Combined into one "${combined.name}"`);
+  }
 
   function goTo(v: View) {
     setView(v);
@@ -534,9 +783,19 @@ export default function App() {
           </button>
 
           {status.kind === "error" && <p className="error-text">{status.message}</p>}
-          {status.kind === "done" && <p className="success-text">Added ingredients from "{status.recipeName}"</p>}
+          {status.kind === "done" && (
+            <>
+              <p className="success-text">Added ingredients from "{status.recipeName}"</p>
+              {(status.cookbookName || status.pageNumber) && (
+                <p className="cookbook-confirm-text">
+                  We noticed this is from the cookbook "{status.cookbookName ?? "?"}" and the recipe is on page "
+                  {status.pageNumber ?? "?"}" — look correct? You can fix it on the recipe card.
+                </p>
+              )}
+            </>
+          )}
 
-          <button className="pantry-cta" onClick={openPantryScanner} disabled={status.kind === "scanning"}>
+          <button className="pantry-cta" onClick={() => goTo("kitchenScan")} disabled={status.kind === "scanning"}>
             <span className="pantry-cta-icon">
               <IconFridge color="currentColor" />
             </span>
@@ -654,7 +913,17 @@ export default function App() {
           </button>
 
           {status.kind === "error" && <p className="error-text">{status.message}</p>}
-          {status.kind === "done" && <p className="success-text">Added ingredients from "{status.recipeName}"</p>}
+          {status.kind === "done" && (
+            <>
+              <p className="success-text">Added ingredients from "{status.recipeName}"</p>
+              {(status.cookbookName || status.pageNumber) && (
+                <p className="cookbook-confirm-text">
+                  We noticed this is from the cookbook "{status.cookbookName ?? "?"}" and the recipe is on page "
+                  {status.pageNumber ?? "?"}" — look correct? You can fix it on the recipe card.
+                </p>
+              )}
+            </>
+          )}
 
           {totalCount > 0 ? (
             <>
@@ -736,13 +1005,22 @@ export default function App() {
                     All
                   </button>
                   {recipeNamesInCurrentList.map((name) => (
-                    <button
-                      key={name}
-                      className={`recipe-chip ${recipeChips.has(name) ? "recipe-chip-active" : ""}`}
-                      onClick={() => toggleRecipeChip(name)}
-                    >
-                      {name}
-                    </button>
+                    <span key={name} className="recipe-chip-wrap">
+                      <button
+                        className={`recipe-chip ${recipeChips.has(name) ? "recipe-chip-active" : ""}`}
+                        onClick={() => toggleRecipeChip(name)}
+                      >
+                        {name}
+                      </button>
+                      <button
+                        className="recipe-chip-remove"
+                        onClick={() => removeRecipeByName(name)}
+                        aria-label={`Clear "${name}" from your list`}
+                        title={`Not shopping for "${name}" this week — clear its items`}
+                      >
+                        ✕
+                      </button>
+                    </span>
                   ))}
                 </div>
               )}
@@ -755,40 +1033,79 @@ export default function App() {
                     <section key={aisle} className="aisle-section">
                       <h2 className="aisle-title">{aisle}</h2>
                       <ul className="item-list">
-                        {items.map((item) => (
-                          <li key={item.id} className={`item-row ${item.checked ? "checked" : ""}`}>
-                            <label className="item-label">
-                              <input type="checkbox" checked={item.checked} onChange={() => toggleChecked(item.id)} />
-                              <span className="item-text">
-                                <span className="item-name">{item.name}</span>
-                                {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
-                                {item.note && <span className="item-note"> ({item.note})</span>}
-                                {item.sourceRecipes.length > 1 && (
-                                  <span className="shared-badge">
-                                    <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5b6fa0" strokeWidth="2.4">
-                                      <circle cx="9" cy="12" r="6" />
-                                      <circle cx="15" cy="12" r="6" />
-                                    </svg>
-                                    {item.sourceRecipes.length} recipes
-                                  </span>
-                                )}
-                                {kitchenKeySet.has(simpleNameKey(item.name)) && (
-                                  <span className="kitchen-flag-badge">
-                                    <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#a8752f" strokeWidth="2.4">
-                                      <rect x="5" y="2.5" width="14" height="19" rx="2.2" />
-                                      <line x1="5" y1="9.5" x2="19" y2="9.5" />
-                                    </svg>
-                                    In your kitchen — check amount
-                                  </span>
-                                )}
-                                <span className="item-source">{item.sourceRecipes.join(", ")}</span>
-                              </span>
-                            </label>
-                            <button className="remove-button" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.name}`}>
-                              ✕
-                            </button>
-                          </li>
-                        ))}
+                        {items.map((item) =>
+                          listEditDraft?.id === item.id ? (
+                            <li key={item.id} className="item-row item-row-editing">
+                              <div className="inline-edit-form">
+                                <input
+                                  className="manual-input manual-input-name"
+                                  value={listEditDraft.name}
+                                  onChange={(e) => setListEditDraft({ ...listEditDraft, name: e.target.value })}
+                                  autoFocus
+                                />
+                                <input
+                                  className="manual-input manual-input-qty"
+                                  placeholder="Qty"
+                                  inputMode="decimal"
+                                  value={listEditDraft.qty}
+                                  onChange={(e) => setListEditDraft({ ...listEditDraft, qty: e.target.value })}
+                                />
+                                <input
+                                  className="manual-input manual-input-unit"
+                                  placeholder="Unit"
+                                  value={listEditDraft.unit}
+                                  onChange={(e) => setListEditDraft({ ...listEditDraft, unit: e.target.value })}
+                                />
+                                <div className="inline-edit-actions">
+                                  <button className="secondary-button" onClick={cancelEditListItem}>
+                                    Cancel
+                                  </button>
+                                  <button className="secondary-button primary-ish" onClick={saveEditListItem} disabled={!listEditDraft.name.trim()}>
+                                    Save
+                                  </button>
+                                </div>
+                              </div>
+                            </li>
+                          ) : (
+                            <li key={item.id} className={`item-row ${item.checked ? "checked" : ""}`}>
+                              <label className="item-label">
+                                <input type="checkbox" checked={item.checked} onChange={() => toggleChecked(item.id)} />
+                                <span className="item-text">
+                                  <span className="item-name">{item.name}</span>
+                                  {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
+                                  {item.note && <span className="item-note"> ({item.note})</span>}
+                                  {item.sourceRecipes.length > 1 && (
+                                    <span className="shared-badge">
+                                      <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5b6fa0" strokeWidth="2.4">
+                                        <circle cx="9" cy="12" r="6" />
+                                        <circle cx="15" cy="12" r="6" />
+                                      </svg>
+                                      {item.sourceRecipes.length} recipes
+                                    </span>
+                                  )}
+                                  {kitchenKeySet.has(simpleNameKey(item.name)) && (
+                                    <span className="kitchen-flag-badge">
+                                      <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#a8752f" strokeWidth="2.4">
+                                        <rect x="5" y="2.5" width="14" height="19" rx="2.2" />
+                                        <line x1="5" y1="9.5" x2="19" y2="9.5" />
+                                      </svg>
+                                      In your kitchen — check amount
+                                    </span>
+                                  )}
+                                  <span className="item-source">{item.sourceRecipes.join(", ")}</span>
+                                </span>
+                              </label>
+                              <div className="item-row-actions">
+                                <button className="edit-button" onClick={() => startEditListItem(item)} aria-label={`Edit ${item.name}`}>
+                                  ✎
+                                </button>
+                                <button className="remove-button" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.name}`}>
+                                  ✕
+                                </button>
+                              </div>
+                            </li>
+                          )
+                        )}
                       </ul>
                     </section>
                   );
@@ -926,14 +1243,11 @@ export default function App() {
           <p className="subtitle">What's already in your fridge and pantry, so recipes can flag what you don't need to buy.</p>
 
           <div className="kitchen-toolbar">
-            <button
-              className="secondary-button primary-ish"
-              onClick={() => {
-                setPantryPhotos([]);
-                goTo("kitchenScan");
-              }}
-            >
+            <button className="secondary-button primary-ish" onClick={() => goTo("kitchenScan")}>
               <IconCamera color="currentColor" /> Snap new pics
+            </button>
+            <button className="secondary-button" onClick={() => setAddKitchenItemOpen((v) => !v)}>
+              + Add item
             </button>
             {kitchen.length > 0 && (
               <button className="secondary-button danger" onClick={clearKitchen}>
@@ -941,6 +1255,50 @@ export default function App() {
               </button>
             )}
           </div>
+
+          {addKitchenItemOpen && (
+            <div className="manual-add-card">
+              <input
+                className="manual-input manual-input-name"
+                placeholder="Item name"
+                value={manualKitchenName}
+                onChange={(e) => setManualKitchenName(e.target.value)}
+                autoFocus
+              />
+              <input
+                className="manual-input manual-input-qty"
+                placeholder="Qty"
+                inputMode="decimal"
+                value={manualKitchenQty}
+                onChange={(e) => setManualKitchenQty(e.target.value)}
+              />
+              <input
+                className="manual-input manual-input-unit"
+                placeholder="Unit"
+                value={manualKitchenUnit}
+                onChange={(e) => setManualKitchenUnit(e.target.value)}
+              />
+              <select
+                className="manual-input manual-input-aisle"
+                value={manualKitchenAisle}
+                onChange={(e) => setManualKitchenAisle(e.target.value as Aisle)}
+              >
+                {AISLES.map((a) => (
+                  <option key={a} value={a}>
+                    {a}
+                  </option>
+                ))}
+              </select>
+              <div className="manual-add-actions">
+                <button className="secondary-button" onClick={() => setAddKitchenItemOpen(false)}>
+                  Cancel
+                </button>
+                <button className="secondary-button primary-ish" onClick={handleManualKitchenAdd} disabled={!manualKitchenName.trim()}>
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
 
           {kitchen.length === 0 ? (
             <div className="empty-state">
@@ -951,23 +1309,75 @@ export default function App() {
               {kitchen
                 .slice()
                 .sort((a, b) => a.name.localeCompare(b.name))
-                .map((item) => (
-                  <div key={item.id} className="kitchen-row">
-                    <div className="kitchen-row-text">
-                      <span className="item-name">{item.name}</span>
-                      {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
-                      {item.confidence === "low" && <span className="confidence-badge">best guess</span>}
+                .map((item) =>
+                  kitchenEditDraft?.id === item.id ? (
+                    <div key={item.id} className="kitchen-row kitchen-row-editing">
+                      <div className="inline-edit-form">
+                        <input
+                          className="manual-input manual-input-name"
+                          value={kitchenEditDraft.name}
+                          onChange={(e) => setKitchenEditDraft({ ...kitchenEditDraft, name: e.target.value })}
+                          autoFocus
+                        />
+                        <input
+                          className="manual-input manual-input-qty"
+                          placeholder="Qty"
+                          inputMode="decimal"
+                          value={kitchenEditDraft.qty}
+                          onChange={(e) => setKitchenEditDraft({ ...kitchenEditDraft, qty: e.target.value })}
+                        />
+                        <input
+                          className="manual-input manual-input-unit"
+                          placeholder="Unit"
+                          value={kitchenEditDraft.unit}
+                          onChange={(e) => setKitchenEditDraft({ ...kitchenEditDraft, unit: e.target.value })}
+                        />
+                        <select
+                          className="manual-input manual-input-aisle"
+                          value={kitchenEditDraft.aisle}
+                          onChange={(e) => setKitchenEditDraft({ ...kitchenEditDraft, aisle: e.target.value as Aisle })}
+                        >
+                          {AISLES.map((a) => (
+                            <option key={a} value={a}>
+                              {a}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="inline-edit-actions">
+                          <button className="secondary-button" onClick={cancelEditKitchenItem}>
+                            Cancel
+                          </button>
+                          <button
+                            className="secondary-button primary-ish"
+                            onClick={saveEditKitchenItem}
+                            disabled={!kitchenEditDraft.name.trim()}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="kitchen-row-actions">
-                      <button className="secondary-button" onClick={() => moveKitchenItemToList(item)}>
-                        Ran out — add to list
-                      </button>
-                      <button className="remove-button" onClick={() => deleteKitchenItem(item.id)} aria-label={`Remove ${item.name}`}>
-                        ✕
-                      </button>
+                  ) : (
+                    <div key={item.id} className="kitchen-row">
+                      <div className="kitchen-row-text">
+                        <span className="item-name">{item.name}</span>
+                        {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
+                        {item.confidence === "low" && <span className="confidence-badge">best guess</span>}
+                      </div>
+                      <div className="kitchen-row-actions">
+                        <button className="secondary-button" onClick={() => moveKitchenItemToList(item)}>
+                          Ran out — add to list
+                        </button>
+                        <button className="edit-button" onClick={() => startEditKitchenItem(item)} aria-label={`Edit ${item.name}`}>
+                          ✎
+                        </button>
+                        <button className="remove-button" onClick={() => deleteKitchenItem(item.id)} aria-label={`Remove ${item.name}`}>
+                          ✕
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                )}
             </div>
           )}
         </div>
@@ -977,27 +1387,23 @@ export default function App() {
       {view === "kitchenScan" && (
         <div className="screen">
           <header className="page-header">
-            <button
-              className="back-link"
-              onClick={() => {
-                setPantryPhotos([]);
-                goTo("kitchen");
-              }}
-              aria-label="Back"
-            >
+            <button className="back-link" onClick={() => goTo("kitchen")} aria-label="Back">
               ‹
             </button>
             <h1>What's in my kitchen?</h1>
           </header>
 
-          <p className="subtitle">Snap a few photos — fridge, freezer, pantry shelf, wherever. We'll figure out what's in them.</p>
+          <p className="subtitle">
+            Snap a few photos — fridge, freezer, pantry shelf, wherever. They'll stay here until you scan them or
+            remove them, so you won't have to retake them if you step away.
+          </p>
 
           {pantryPhotos.length > 0 && (
             <div className="pantry-photo-strip">
               {pantryPhotos.map((p, idx) => (
-                <div key={idx} className="pantry-photo-thumb">
+                <div key={p.id} className="pantry-photo-thumb">
                   <img src={p.dataUrl} alt={`Kitchen photo ${idx + 1}`} />
-                  <button className="pantry-photo-remove" onClick={() => removePantryPhoto(idx)} aria-label="Remove photo">
+                  <button className="pantry-photo-remove" onClick={() => removePantryPhoto(p.id)} aria-label="Remove photo">
                     ✕
                   </button>
                 </div>
@@ -1013,13 +1419,7 @@ export default function App() {
           {status.kind === "error" && <p className="error-text">{status.message}</p>}
 
           <div className="kitchen-scan-actions">
-            <button
-              className="secondary-button"
-              onClick={() => {
-                setPantryPhotos([]);
-                goTo("kitchen");
-              }}
-            >
+            <button className="secondary-button" onClick={() => goTo("kitchen")}>
               Cancel
             </button>
             <button
@@ -1197,6 +1597,29 @@ export default function App() {
             <button className="sheet-cancel" onClick={closeSheet}>
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- SHARED-ITEM CONFIRMATION (meat/seafood cuts named differently by 2 recipes) ---------------- */}
+      {meatDuplicateCandidate && (
+        <div className="sheet-overlay" onClick={() => resolveMeatDuplicate("separate")}>
+          <div className="meat-duplicate-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="meat-duplicate-title">Buying two of the same thing?</div>
+            <p className="meat-duplicate-text">
+              We noticed 2 recipes both call for a {meatDuplicateCandidate.keyword} — "{meatDuplicateCandidate.a.name}" (
+              {meatDuplicateCandidate.a.sourceRecipes.join(", ")}) and "{meatDuplicateCandidate.b.name}" (
+              {meatDuplicateCandidate.b.sourceRecipes.join(", ")}). Do you want to buy both, or are you planning to
+              share one across the two recipes?
+            </p>
+            <div className="meat-duplicate-actions">
+              <button className="secondary-button" onClick={() => resolveMeatDuplicate("separate")}>
+                Buy both
+              </button>
+              <button className="secondary-button primary-ish" onClick={() => resolveMeatDuplicate("combine")}>
+                Just get one
+              </button>
+            </div>
           </div>
         </div>
       )}
