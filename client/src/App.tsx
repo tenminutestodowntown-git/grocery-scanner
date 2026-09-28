@@ -52,13 +52,19 @@ function simpleNameKey(name: string): string {
   return lower;
 }
 
-// Words that name a "type" of meat/seafood cut broadly enough that two differently-named
-// items sharing one (e.g. "Chuck roast" and "Pot roast") are very likely the same purchase
-// for two different recipes, not two genuinely different things to buy. Deliberately scoped
-// to the Meat & Seafood aisle only and to bigger-ticket items — a shared "1 onion" across two
-// recipes already just merges into one list line, so this is only for the case where the
-// vision model (correctly) kept two different-sounding cuts as separate lines.
-const MEAT_TYPE_WORDS = [
+// Words that name a "type" of item specific enough that two differently-named lines sharing
+// one (e.g. "Chuck roast" and "Pot roast", or "Extra virgin olive oil" and "Olive oil") are
+// very likely the same purchase for two different recipes, not two genuinely different things
+// to buy — either because it's a bigger-ticket cut of meat/seafood, or because it's a pantry
+// staple that typically comes in one bulk container shared across many recipes (flour, sugar,
+// oils, spices, nuts, condiments, pickles, etc.) rather than being bought fresh per recipe.
+// A shared "1 onion" across two recipes already just merges into one list line via nameKey, so
+// this is only for the case where the vision model (correctly, per-recipe) kept two
+// different-sounding names as separate lines. Keeps specific product families apart on purpose
+// (separate "olive oil" / "vegetable oil" / "canola oil" entries, not one generic "oil") so two
+// genuinely different oils don't get lumped together — the prompt only fires within a family.
+const SHARED_ITEM_KEYWORDS = [
+  // Meat & seafood cuts
   "roast",
   "chicken",
   "steak",
@@ -78,32 +84,87 @@ const MEAT_TYPE_WORDS = [
   "cod",
   "tilapia",
   "tuna",
+  // Baking staples
+  "flour",
+  "sugar",
+  "baking soda",
+  "baking powder",
+  "cornstarch",
+  "vanilla",
+  "yeast",
+  "breadcrumbs",
+  // Oils, sauces & condiments (each its own family — not a generic "oil"/"sauce")
+  "olive oil",
+  "vegetable oil",
+  "canola oil",
+  "avocado oil",
+  "coconut oil",
+  "sesame oil",
+  "soy sauce",
+  "vinegar",
+  "honey",
+  "maple syrup",
+  "peanut butter",
+  "almond butter",
+  "mayonnaise",
+  "mayo",
+  "ketchup",
+  "mustard",
+  "salsa",
+  "hot sauce",
+  "jam",
+  "jelly",
+  "relish",
+  "pickle",
+  "pickles",
+  // Bulk dry goods
+  "rice",
+  "pasta",
+  "oats",
+  "quinoa",
+  "broth",
+  "stock",
+  // Spices (bought in bulk, used a pinch at a time)
+  "cinnamon",
+  "cumin",
+  "paprika",
+  "garlic powder",
+  "onion powder",
+  "chili powder",
+  "salt",
+  "pepper",
+  // Nuts (kept specific so almonds don't get lumped in with cashews)
+  "almonds",
+  "walnuts",
+  "cashews",
+  "peanuts",
+  "pecans",
+  "pistachios",
 ];
 
-function meatKeyword(name: string): string | null {
+function sharedItemKeyword(name: string): string | null {
   const lower = name.toLowerCase();
-  for (const w of MEAT_TYPE_WORDS) {
+  for (const w of SHARED_ITEM_KEYWORDS) {
     if (lower.includes(w)) return w;
   }
   return null;
 }
 
-/** Finds the first pair of Meat & Seafood list lines (not already dismissed) that come from
- * different recipes but share the same broad "type" keyword — a likely case of the same cut
- * getting bought twice because two recipes named it slightly differently. Returns at most one
- * candidate at a time so only one prompt shows on screen at once. */
-function findMeatDuplicateCandidate(
+/** Finds the first pair of list lines (not already dismissed) that come from different recipes
+ * but share the same specific "family" keyword — a likely case of the same thing getting
+ * bought twice because two recipes named it slightly differently. Returns at most one candidate
+ * at a time so only one prompt shows on screen at once. */
+function findSharedItemDuplicateCandidate(
   items: Ingredient[],
   dismissed: Set<string>
 ): { a: Ingredient; b: Ingredient; keyword: string; pairKey: string } | null {
-  const meatItems = items.filter((i) => i.aisle === "Meat & Seafood");
-  for (let i = 0; i < meatItems.length; i++) {
-    for (let j = i + 1; j < meatItems.length; j++) {
-      const a = meatItems[i];
-      const b = meatItems[j];
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const a = items[i];
+      const b = items[j];
       if (a.name.trim().toLowerCase() === b.name.trim().toLowerCase()) continue; // already the same line
-      const kwA = meatKeyword(a.name);
-      const kwB = meatKeyword(b.name);
+      const kwA = sharedItemKeyword(a.name);
+      const kwB = sharedItemKeyword(b.name);
       if (kwA && kwA === kwB) {
         const pairKey = [a.id, b.id].sort().join("::");
         if (!dismissed.has(pairKey)) return { a, b, keyword: kwA, pairKey };
@@ -114,9 +175,9 @@ function findMeatDuplicateCandidate(
 }
 
 /** Folds two distinct list lines into one — used when the user says two differently-named
- * meat/seafood items are really the same purchase shared across recipes. Sums the quantity
- * only when the units already match (rather than guessing at a conversion); otherwise keeps
- * the first line's amount and notes the second's name so nothing is silently lost. */
+ * items are really the same purchase shared across recipes. Sums the quantity only when the
+ * units already match (rather than guessing at a conversion); otherwise keeps the first line's
+ * amount and notes the second's name so nothing is silently lost. */
 function combineTwoIngredients(a: Ingredient, b: Ingredient): Ingredient {
   const sameUnit = a.unit === b.unit;
   const quantity = sameUnit && a.quantity !== null && b.quantity !== null ? a.quantity + b.quantity : a.quantity ?? b.quantity;
@@ -266,7 +327,7 @@ export default function App() {
   // Pairs of Meat & Seafood items (from different recipes) the user has already told us they
   // want to buy separately — remembered per session so the same prompt doesn't nag them again
   // right after they answer it once.
-  const [dismissedMeatPairs, setDismissedMeatPairs] = useState<Set<string>>(new Set());
+  const [dismissedSharedItemPairs, setDismissedSharedItemPairs] = useState<Set<string>>(new Set());
   // Checking an item off doesn't remove it right away — it's marked checked and given a
   // 10s grace window (in case the tap was accidental) before it's actually dropped from the
   // list and tracked into My Kitchen. Unchecking within that window just undoes the check
@@ -802,13 +863,13 @@ export default function App() {
   const recipeNamesInCurrentList = Array.from(new Set(list.flatMap((item) => item.sourceRecipes))).sort();
   const displayedList = recipeChips.size === 0 ? list : list.filter((item) => item.sourceRecipes.some((n) => recipeChips.has(n)));
   const kitchenKeySet = new Set(kitchen.map((k) => simpleNameKey(k.name)));
-  const meatDuplicateCandidate = findMeatDuplicateCandidate(list, dismissedMeatPairs);
+  const sharedItemCandidate = findSharedItemDuplicateCandidate(list, dismissedSharedItemPairs);
 
-  function resolveMeatDuplicate(action: "separate" | "combine") {
-    if (!meatDuplicateCandidate) return;
-    const { a, b, pairKey } = meatDuplicateCandidate;
+  function resolveSharedItemDuplicate(action: "separate" | "combine") {
+    if (!sharedItemCandidate) return;
+    const { a, b, pairKey } = sharedItemCandidate;
     if (action === "separate") {
-      setDismissedMeatPairs((prev) => new Set(prev).add(pairKey));
+      setDismissedSharedItemPairs((prev) => new Set(prev).add(pairKey));
       return;
     }
     const combined = combineTwoIngredients(a, b);
@@ -1726,21 +1787,21 @@ export default function App() {
       )}
 
       {/* ---------------- SHARED-ITEM CONFIRMATION (meat/seafood cuts named differently by 2 recipes) ---------------- */}
-      {meatDuplicateCandidate && (
-        <div className="sheet-overlay" onClick={() => resolveMeatDuplicate("separate")}>
+      {sharedItemCandidate && (
+        <div className="sheet-overlay" onClick={() => resolveSharedItemDuplicate("separate")}>
           <div className="meat-duplicate-modal" onClick={(e) => e.stopPropagation()}>
             <div className="meat-duplicate-title">Buying two of the same thing?</div>
             <p className="meat-duplicate-text">
-              We noticed 2 recipes both call for a {meatDuplicateCandidate.keyword} — "{meatDuplicateCandidate.a.name}" (
-              {meatDuplicateCandidate.a.sourceRecipes.join(", ")}) and "{meatDuplicateCandidate.b.name}" (
-              {meatDuplicateCandidate.b.sourceRecipes.join(", ")}). Do you want to buy both, or are you planning to
+              We noticed 2 recipes both call for {sharedItemCandidate.keyword} — "{sharedItemCandidate.a.name}" (
+              {sharedItemCandidate.a.sourceRecipes.join(", ")}) and "{sharedItemCandidate.b.name}" (
+              {sharedItemCandidate.b.sourceRecipes.join(", ")}). Do you want to buy both, or are you planning to
               share one across the two recipes?
             </p>
             <div className="meat-duplicate-actions">
-              <button className="secondary-button" onClick={() => resolveMeatDuplicate("separate")}>
+              <button className="secondary-button" onClick={() => resolveSharedItemDuplicate("separate")}>
                 Buy both
               </button>
-              <button className="secondary-button primary-ish" onClick={() => resolveMeatDuplicate("combine")}>
+              <button className="secondary-button primary-ish" onClick={() => resolveSharedItemDuplicate("combine")}>
                 Just get one
               </button>
             </div>
