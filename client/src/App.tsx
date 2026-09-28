@@ -261,10 +261,28 @@ export default function App() {
   // want to buy separately — remembered per session so the same prompt doesn't nag them again
   // right after they answer it once.
   const [dismissedMeatPairs, setDismissedMeatPairs] = useState<Set<string>>(new Set());
+  // Checking an item off doesn't remove it right away — it's marked checked and given a
+  // 10s grace window (in case the tap was accidental) before it's actually dropped from the
+  // list and tracked into My Kitchen. Unchecking within that window just undoes the check
+  // as if nothing happened. Timers live in a ref (not state) since they're not rendered;
+  // pendingRemovalIds is what drives the "removing in 10s" UI.
+  const pendingRemovalTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const [pendingRemovalIds, setPendingRemovalIds] = useState<Set<string>>(new Set());
+  const listRef = useRef(list);
 
   useEffect(() => {
     saveList(list);
+    listRef.current = list;
   }, [list]);
+
+  // Cancel any pending 10s removals if the app unmounts, so they can't fire against
+  // state that no longer exists.
+  useEffect(() => {
+    return () => {
+      pendingRemovalTimers.current.forEach((t) => clearTimeout(t));
+      pendingRemovalTimers.current.clear();
+    };
+  }, []);
 
   useEffect(() => {
     saveRecipes(recipes);
@@ -321,17 +339,52 @@ export default function App() {
   }
 
   function toggleChecked(id: string) {
-    setList((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target) {
-        // Checking something off means you now have it — track it in My Kitchen so future
-        // recipes can flag it. Unchecking mirrors that (removes it again) so an accidental
-        // tap of the checkbox — or catching a mistaken check — cleanly undoes itself.
-        if (!target.checked) addToKitchenFromItem(target);
-        else removeFromKitchenByName(target.name);
-      }
-      return prev.map((item) => (item.id === id ? { ...item, checked: !item.checked } : item));
-    });
+    const target = list.find((item) => item.id === id);
+    if (!target) return;
+
+    if (!target.checked) {
+      // Check it off right away for visual feedback, but hold off 10s before actually
+      // dropping it from the list and tracking it into My Kitchen — long enough to catch
+      // an accidental tap without the item just vanishing under your thumb.
+      setList((prev) => prev.map((item) => (item.id === id ? { ...item, checked: true } : item)));
+      setPendingRemovalIds((prev) => new Set(prev).add(id));
+
+      const timer = setTimeout(() => {
+        pendingRemovalTimers.current.delete(id);
+        setPendingRemovalIds((prev) => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        const stillChecked = listRef.current.find((item) => item.id === id);
+        if (!stillChecked) return; // already removed some other way
+        addToKitchenFromItem(stillChecked);
+        setList((prev) => prev.filter((item) => item.id !== id));
+      }, 10000);
+      pendingRemovalTimers.current.set(id, timer);
+      return;
+    }
+
+    // Unchecking. If it's still within the grace window, cancel the pending removal —
+    // nothing was ever committed to My Kitchen, so there's nothing to undo there.
+    const pendingTimer = pendingRemovalTimers.current.get(id);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      pendingRemovalTimers.current.delete(id);
+      setPendingRemovalIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setList((prev) => prev.map((item) => (item.id === id ? { ...item, checked: false } : item)));
+      return;
+    }
+
+    // No pending timer (shouldn't normally happen — a fully-checked item should already have
+    // been removed by then) — fall back to the old undo-the-kitchen-tracking behavior.
+    removeFromKitchenByName(target.name);
+    setList((prev) => prev.map((item) => (item.id === id ? { ...item, checked: false } : item)));
   }
 
   function removeFromKitchenByName(name: string) {
@@ -347,17 +400,42 @@ export default function App() {
     });
   }
 
+  function cancelPendingRemoval(id: string) {
+    const timer = pendingRemovalTimers.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      pendingRemovalTimers.current.delete(id);
+    }
+    setPendingRemovalIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
   function removeItem(id: string) {
+    cancelPendingRemoval(id);
     setList((prev) => prev.filter((item) => item.id !== id));
   }
 
   function clearChecked() {
+    // Treat this like the 10s grace window resolving early: whatever's checked right now
+    // gets tracked into My Kitchen (same as if the timer had simply run out) and dropped.
+    const checkedItems = list.filter((item) => item.checked);
+    checkedItems.forEach((item) => {
+      cancelPendingRemoval(item.id);
+      addToKitchenFromItem(item);
+    });
     setList((prev) => prev.filter((item) => !item.checked));
   }
 
   function clearAll() {
     if (list.length === 0) return;
     if (confirm("Clear the whole list? This can't be undone.")) {
+      pendingRemovalTimers.current.forEach((t) => clearTimeout(t));
+      pendingRemovalTimers.current.clear();
+      setPendingRemovalIds(new Set());
       setList([]);
     }
   }
@@ -1067,13 +1145,21 @@ export default function App() {
                               </div>
                             </li>
                           ) : (
-                            <li key={item.id} className={`item-row ${item.checked ? "checked" : ""}`}>
+                            <li
+                              key={item.id}
+                              className={`item-row ${item.checked ? "checked" : ""} ${
+                                pendingRemovalIds.has(item.id) ? "pending-removal" : ""
+                              }`}
+                            >
                               <label className="item-label">
                                 <input type="checkbox" checked={item.checked} onChange={() => toggleChecked(item.id)} />
                                 <span className="item-text">
                                   <span className="item-name">{item.name}</span>
                                   {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
                                   {item.note && <span className="item-note"> ({item.note})</span>}
+                                  {pendingRemovalIds.has(item.id) && (
+                                    <span className="pending-removal-note">Removing in 10s — uncheck to keep it</span>
+                                  )}
                                   {item.sourceRecipes.length > 1 && (
                                     <span className="shared-badge">
                                       <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5b6fa0" strokeWidth="2.4">
@@ -1096,9 +1182,11 @@ export default function App() {
                                 </span>
                               </label>
                               <div className="item-row-actions">
-                                <button className="edit-button" onClick={() => startEditListItem(item)} aria-label={`Edit ${item.name}`}>
-                                  ✎
-                                </button>
+                                {!pendingRemovalIds.has(item.id) && (
+                                  <button className="edit-button" onClick={() => startEditListItem(item)} aria-label={`Edit ${item.name}`}>
+                                    ✎
+                                  </button>
+                                )}
                                 <button className="remove-button" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.name}`}>
                                   ✕
                                 </button>
