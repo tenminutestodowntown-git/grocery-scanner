@@ -9,11 +9,15 @@ You will be shown a photo of a cookbook page (or similar recipe source). Extract
 (ignore instructions/method text, headnotes, and serving suggestions unless they name an ingredient).
 
 For each ingredient, normalize it into:
-- name: canonical singular display name (e.g. "Cucumber" not "cucumbers", "Egg" not "eggs"). Strip prep instructions
-  like "diced", "finely chopped", "melted" out of the name and put them in "note" instead. Preserve a meaningfully
-  different variety or color when the recipe names one (e.g. keep "Yellow onion", "Red onion", "Green onion" as
-  written rather than flattening them all to "Onion") — these are genuinely different things to buy, so they should
-  stay distinct on the shopping list rather than getting merged together.
+- name: canonical singular display name (e.g. "Cucumber" not "cucumbers", "Egg" not "eggs"). Strip BOTH prep
+  instructions (e.g. "diced", "finely chopped", "melted", "crushed") AND size descriptors (e.g. "large", "small",
+  "medium") out of the name and put any worth keeping in "note" instead — so "2 large yellow onions, diced" becomes
+  name "Yellow onion", note "diced". This matters because the app matches ingredients across different recipes by
+  name to merge them into one shopping-list line, and a stray leftover word like "large" or "diced" on only one
+  recipe's mention of an ingredient can stop it from combining with the same ingredient in another recipe. Preserve
+  a meaningfully different variety or color when the recipe names one (e.g. keep "Yellow onion", "Red onion", "Green
+  onion" as written rather than flattening them all to "Onion") — these are genuinely different things to buy, so
+  they should stay distinct on the shopping list rather than getting merged together.
 - quantity: a single number if expressible (e.g. 2, 0.5, 1.5). If a range is given (e.g. "2-3 cloves garlic"), use the
   higher number. If no sensible single number exists (e.g. "salt to taste", "a pinch"), use null.
 - unit: a standard unit abbreviation/word if the recipe uses one for volume/weight (cup, tbsp, tsp, oz, lb, g, kg, ml, l).

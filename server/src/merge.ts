@@ -31,9 +31,57 @@ function singularize(word: string): string {
   return word;
 }
 
-/** Normalize a name to a matching key: lowercase, singular, alias-resolved. */
+// Size/prep words that sometimes leak into the extracted "name" instead of getting stripped
+// into "note" like the vision prompt asks for (the model isn't perfectly consistent about
+// this). They're harmless in the display name, but if left in they make otherwise-identical
+// ingredients from different recipes look different for matching purposes — e.g. "Large
+// yellow onion" and "Yellow onion, diced" should still combine into one "Yellow onion" line.
+// This only affects the MATCHING key, never the text actually shown on the list.
+const SIZE_WORDS = ["small", "medium", "large", "extra large", "extra-large", "jumbo"];
+const TRAILING_PREP_WORDS = [
+  "diced",
+  "chopped",
+  "minced",
+  "sliced",
+  "halved",
+  "quartered",
+  "cubed",
+  "julienned",
+  "grated",
+  "shredded",
+  "peeled",
+  "cored",
+  "seeded",
+  "stemmed",
+  "trimmed",
+  "crushed",
+  "melted",
+  "softened",
+];
+
+function stripDescriptors(lower: string): string {
+  // Prep notes are sometimes appended after a comma (e.g. "onion, diced") even though they
+  // belong in "note" — drop anything after the first comma for matching purposes.
+  let s = lower.split(",")[0].trim();
+
+  for (const w of SIZE_WORDS) {
+    if (s === w) break; // don't strip down to nothing if the whole name is just the size word
+    if (s.startsWith(`${w} `)) {
+      s = s.slice(w.length + 1).trim();
+      break;
+    }
+  }
+
+  let words = s.split(" ");
+  while (words.length > 1 && TRAILING_PREP_WORDS.includes(words[words.length - 1])) {
+    words = words.slice(0, -1);
+  }
+  return words.join(" ");
+}
+
+/** Normalize a name to a matching key: lowercase, descriptor-stripped, singular, alias-resolved. */
 export function nameKey(name: string): string {
-  const lower = name.trim().toLowerCase();
+  const lower = stripDescriptors(name.trim().toLowerCase());
   const singular = singularize(lower);
   return NAME_ALIASES[lower] ?? NAME_ALIASES[singular] ?? singular;
 }

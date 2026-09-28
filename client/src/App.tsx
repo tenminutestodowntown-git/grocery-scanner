@@ -132,6 +132,12 @@ function combineTwoIngredients(a: Ingredient, b: Ingredient): Ingredient {
   };
 }
 
+// Aisles treated as "multi-use pantry staples" for the "Made this recipe" feature — things
+// like oil, spices, and bulk baking supplies get used a little at a time across many recipes,
+// so making one recipe shouldn't wipe them out of My Kitchen. Everything else (produce, canned
+// goods, meat, dairy, frozen, etc.) is treated as used up when the recipe is made.
+const KITCHEN_KEEP_AISLES = new Set<string>(["Cooking Oils & Nut Butters", "Baking", "Bulk Foods (Nuts, Spices, etc.)"]);
+
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
@@ -459,6 +465,29 @@ export default function App() {
 
   function deleteRecipe(id: string) {
     setRecipes((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  // "Made this recipe" — you've now used up whatever it called for, so clear the smaller,
+  // single-use items (veggies, canned goods, meat, etc.) out of My Kitchen. Multi-use pantry
+  // staples (oil, spices, bulk baking supplies — see KITCHEN_KEEP_AISLES) are left alone since
+  // making one recipe barely dents those.
+  function markRecipeMade(recipe: Recipe) {
+    const keysToClear = new Set(
+      recipe.ingredients.filter((ing) => !KITCHEN_KEEP_AISLES.has(ing.aisle)).map((ing) => simpleNameKey(ing.name))
+    );
+    if (keysToClear.size === 0) {
+      setToast(`"${recipe.name}" only used pantry staples — nothing to clear`);
+      return;
+    }
+    let clearedCount = 0;
+    setKitchen((prev) =>
+      prev.filter((item) => {
+        const keep = !keysToClear.has(simpleNameKey(item.name));
+        if (!keep) clearedCount++;
+        return keep;
+      })
+    );
+    setToast(clearedCount > 0 ? `Cleared ${clearedCount} used-up item${clearedCount === 1 ? "" : "s"} from My Kitchen` : `Nothing from "${recipe.name}" was in My Kitchen`);
   }
 
   function toggleExpand(id: string) {
@@ -1289,6 +1318,13 @@ export default function App() {
                           Add to list
                         </button>
                       )}
+                      <button
+                        className="secondary-button primary-ish"
+                        onClick={() => markRecipeMade(recipe)}
+                        title="Clears this recipe's used-up items (produce, canned goods, etc.) from My Kitchen — keeps staples like oil and spices"
+                      >
+                        Made this recipe
+                      </button>
                       <button className="secondary-button danger" onClick={() => deleteRecipe(recipe.id)}>
                         Delete recipe
                       </button>
