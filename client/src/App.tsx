@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import { AISLES, MANUAL_ENTRY_SOURCE, RAN_OUT_SOURCE } from "./types";
 import type { Aisle, Ingredient, KitchenItem, PantryPhoto, Recipe } from "./types";
@@ -28,7 +28,7 @@ type Status =
   | { kind: "error"; message: string }
   | { kind: "done"; recipeName: string; cookbookName?: string | null; pageNumber?: string | null };
 type RecipeFilter = "all" | "favorites";
-type View = "home" | "list" | "recipes" | "kitchen" | "kitchenScan" | "kitchenReview";
+type View = "home" | "list" | "recipes" | "kitchen" | "kitchenScan" | "kitchenReview" | "help";
 
 function formatQuantity(item: { quantity: number | null; unit: string | null }): string {
   const parts: string[] = [];
@@ -290,86 +290,191 @@ function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
 }
 
-// --- inline icons, matching the wireframe's stroke-icon style ---
-function IconCart({ color = "#3f8f7f" }: { color?: string }) {
+// --- inline icons (Page to Plate brand set: rounded 24px-grid strokes) ---
+type IconProps = { color?: string; size?: number; strokeWidth?: number };
+
+function IconCart({ color = "currentColor", size = 18, strokeWidth = 1.7 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 6h2l1.5 9.5A2 2 0 0 0 8.5 17h8a2 2 0 0 0 2-1.7L20 8H6" />
-      <circle cx="9" cy="20" r="1.3" fill={color} stroke="none" />
-      <circle cx="17" cy="20" r="1.3" fill={color} stroke="none" />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 5h2.2l1.6 10a2 2 0 0 0 2 1.7h7.9a2 2 0 0 0 2-1.6L20.2 8H6" />
+      <circle cx="9.3" cy="20" r="1.3" fill={color} stroke="none" />
+      <circle cx="16.8" cy="20" r="1.3" fill={color} stroke="none" />
     </svg>
   );
 }
-function IconBook({ color = "#4a4a4a" }: { color?: string }) {
+/** Open book; `pageLines` adds the short text strokes used on the "Your Recipes" shortcut. */
+function IconBook({ color = "currentColor", size = 18, strokeWidth = 1.7, pageLines = false }: IconProps & { pageLines?: boolean }) {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 5.5C4 4.7 4.7 4 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z" />
-      <path d="M20 5.5c0-.8-.7-1.5-1.5-1.5H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z" />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 6.5C10.2 5 7.6 4.5 3.5 4.8v13.4c4.1-.3 6.7.2 8.5 1.8 1.8-1.6 4.4-2.1 8.5-1.8V4.8C16.4 4.5 13.8 5 12 6.5z" />
+      <path d="M12 6.5V20" />
+      {pageLines && <path d="M6 8.6h3.6M6 11.4h3.6M6 14.2h2.6M14.4 8.6H18M14.4 11.4H18M14.4 14.2h2.6" strokeWidth={strokeWidth * 0.8} />}
     </svg>
   );
 }
-function IconStar({ color = "#4a4a4a", filled = false }: { color?: string; filled?: boolean }) {
+function IconStar({ color = "currentColor", size = 18, strokeWidth = 1.6, filled = false }: IconProps & { filled?: boolean }) {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill={filled ? color : "none"} stroke={color} strokeWidth="1.6" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill={filled ? color : "none"} stroke={color} strokeWidth={strokeWidth} strokeLinejoin="round">
       <path d="M12 3l2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 16.9 6.4 20.1l1.4-6.3-4.8-4.3 6.4-.6L12 3z" />
     </svg>
   );
 }
-function IconChevronRight({ color = "#c7c7cc" }: { color?: string }) {
+function IconChevronRight({ color = "var(--muted-2)", size = 14 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 6l6 6-6 6" />
     </svg>
   );
 }
-function IconChevronUp({ color = "#9a9a9a" }: { color?: string }) {
+function IconChevronLeft({ color = "currentColor", size = 22 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M15 5l-7 7 7 7" />
+    </svg>
+  );
+}
+function IconChevronUp({ color = "currentColor", size = 14 }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 15l6-6 6 6" />
     </svg>
   );
 }
-function IconCamera({ color = "#3f8f7f" }: { color?: string }) {
+/** Corner-bracket viewfinder with a lens — the brand's "snap a photo" mark. */
+function IconCamera({ color = "currentColor", size = 21, strokeWidth = 1.8 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M4 8h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
-      <circle cx="12" cy="14" r="3.2" />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3.5 8V5.5a2 2 0 0 1 2-2H8M16 3.5h2.5a2 2 0 0 1 2 2V8M20.5 16v2.5a2 2 0 0 1-2 2H16M8 20.5H5.5a2 2 0 0 1-2-2V16" />
+      <circle cx="12" cy="12" r="3.6" />
     </svg>
   );
 }
-function IconNote({ color = "#c7c7cc" }: { color?: string }) {
+function IconNote({ color = "currentColor", size = 18 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 3h9l3 3v15H6z" />
       <path d="M15 3v3h3M8.5 12h7M8.5 15.5h7M8.5 8.5h4" />
     </svg>
   );
 }
-function IconReminder({ color = "#c7c7cc" }: { color?: string }) {
+function IconReminder({ color = "currentColor", size = 18 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.6">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="1.6">
       <rect x="4" y="4" width="16" height="16" rx="3" />
       <path d="M8 12l2.5 2.5L16 9" />
     </svg>
   );
 }
-function IconFridge({ color = "#3f8f7f" }: { color?: string }) {
+/** Rounded fridge body with a shelf line and two door-handle ticks. */
+function IconFridge({ color = "currentColor", size = 18, strokeWidth = 1.7 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke={color} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="5" y="2.5" width="14" height="19" rx="2.2" />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="2.5" width="14" height="19" rx="2.6" />
       <line x1="5" y1="9.5" x2="19" y2="9.5" />
-      <line x1="8" y1="5" x2="8" y2="7.3" />
-      <line x1="8" y1="12" x2="8" y2="14.3" />
+      <line x1="8.2" y1="5.2" x2="8.2" y2="7.2" />
+      <line x1="8.2" y1="12.2" x2="8.2" y2="15" />
     </svg>
   );
 }
-function IconTip({ color = "#3f8f7f" }: { color?: string }) {
+function IconTip({ color = "currentColor", size = 18 }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M9 18h6M10 21h4" />
       <path d="M12 3a6 6 0 0 0-3.5 10.9c.5.4.8 1 .8 1.6V16h5.4v-.5c0-.6.3-1.2.8-1.6A6 6 0 0 0 12 3z" />
     </svg>
   );
+}
+function IconHelp({ color = "currentColor", size = 18, strokeWidth = 2 }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 9a3 3 0 1 1 4.2 2.75c-.75.33-1.2 1.07-1.2 1.88V14.5" />
+      <circle cx="12" cy="18.3" r="0.6" fill={color} />
+    </svg>
+  );
+}
+function IconPlus({ color = "currentColor", size = 10, strokeWidth = 3.2 }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round">
+      <path d="M12 4v16M4 12h16" />
+    </svg>
+  );
+}
+/** The small "✕" used inside every circular remove button. */
+function IconX({ color = "currentColor", size = 10, strokeWidth = 2.4 }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+function IconPeople({ color = "currentColor", size = 26, strokeWidth = 1.6 }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="8.5" r="3.2" />
+      <path d="M3 19.5c.6-3.3 3-5.2 6-5.2s5.4 1.9 6 5.2" />
+      <circle cx="16.8" cy="9.3" r="2.5" />
+      <path d="M16.2 14.4c2.5.1 4.3 1.8 4.8 4.6" />
+    </svg>
+  );
+}
+function IconMoon({ color = "currentColor", size = 24, strokeWidth = 1.6 }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" />
+    </svg>
+  );
+}
+
+/** "Pageto" (handwritten) + "Plate" (bold sans), set tight together. */
+function Wordmark({ small = false }: { small?: boolean }) {
+  return (
+    <span className={`wordmark${small ? " wordmark-small" : ""}`} aria-label="Page to Plate">
+      <span className="wordmark-hand">Pageto</span>
+      <span className="wordmark-bold">Plate</span>
+    </span>
+  );
+}
+
+/** Book icon with the circular "needed by N recipes" count in its top-right corner. */
+function SharedRecipeBadge({ count, iconSize = 32 }: { count: number; iconSize?: number }) {
+  return (
+    <span className="shared-recipe-badge" title={`Needed by ${count} recipes`}>
+      <IconBook color="var(--icon-shared)" size={iconSize} strokeWidth={1.5} />
+      <span className="shared-recipe-count">{count}</span>
+    </span>
+  );
+}
+
+/** Cart with a separate dark "+" corner badge — the "ran out, add it back" mark. */
+function RanOutMark({ size = 26 }: { size?: number }) {
+  return (
+    <>
+      <IconCart color="var(--icon-cart)" size={size} strokeWidth={1.6} />
+      <span className="ran-out-plus">
+        <IconPlus color="#ffffff" />
+      </span>
+    </>
+  );
+}
+
+/** Edge-fade hints for a horizontally scrolling rail: true on a side when there's more to scroll. */
+function useScrollFades(deps: unknown[]) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [fades, setFades] = useState({ left: false, right: false });
+  const update = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const left = el.scrollLeft > 2;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 2;
+    setFades((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
+  useEffect(() => {
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return { ref, fades, onScroll: update };
 }
 
 export default function App() {
@@ -381,6 +486,8 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [view, setView] = useState<View>("home");
+  // Help & Settings "Dark mode" switch — UI-only for now; real theming is a future task.
+  const [darkModePreview, setDarkModePreview] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [recipeChips, setRecipeChips] = useState<Set<string>>(new Set());
   const [addItemOpen, setAddItemOpen] = useState(false);
@@ -974,6 +1081,11 @@ export default function App() {
   const favoriteCount = recipes.filter((r) => r.favorite).length;
   const pillLabel = totalCount === 0 ? "Empty" : `${totalCount} item${totalCount === 1 ? "" : "s"}`;
   const recipeNamesInCurrentList = Array.from(new Set(list.flatMap((item) => item.sourceRecipes))).sort();
+  // Edge fades on the recipe-chip rail; re-measured whenever the screen or the set of chips changes.
+  const { ref: chipRailRef, fades: chipRailFades, onScroll: onChipRailScroll } = useScrollFades([
+    view,
+    recipeNamesInCurrentList.join("|"),
+  ]);
   const displayedList = recipeChips.size === 0 ? list : list.filter((item) => item.sourceRecipes.some((n) => recipeChips.has(n)));
   const kitchenKeySet = new Set(kitchen.map((k) => simpleNameKey(k.name)));
   // Recomputed from the list on every render, so any change that introduces a new pair (a scan,
@@ -1037,7 +1149,11 @@ export default function App() {
     });
   }
 
+  // Help & Settings can be opened from Home or the Grocery List; its back button returns there.
+  const helpReturnView = useRef<View>("home");
+
   function goTo(v: View) {
+    if (v === "help" && view !== "help") helpReturnView.current = view;
     setView(v);
     setSheetOpen(false);
   }
@@ -1093,13 +1209,23 @@ export default function App() {
       {view === "home" && (
         <div className="screen">
           <header className="home-header">
-            <h1>Grocery Scanner</h1>
+            <div className="home-header-top">
+              <h1>
+                <Wordmark />
+              </h1>
+              <button className="circle-icon-button" onClick={() => goTo("help")} aria-label="Help & Settings">
+                <IconHelp />
+              </button>
+            </div>
+            <div className="tagline">
+              SNAP <span className="tagline-sep">▸</span> SHOP <span className="tagline-sep">▸</span> COOK
+            </div>
             <p className="subtitle">Snap a recipe photo, get an organized shopping list.</p>
           </header>
 
           <button className="cta-card" onClick={openScanner} disabled={status.kind === "scanning"}>
-            <span className="cta-icon-circle">
-              <IconCamera />
+            <span className="cta-icon-badge">
+              <IconCamera color="#FAF9F6" size={32} strokeWidth={1.6} />
             </span>
             <span className="cta-text">
               <span className="cta-title">{status.kind === "scanning" ? "Working…" : "What's cooking?"}</span>
@@ -1107,7 +1233,7 @@ export default function App() {
                 {status.kind === "scanning" ? "Reading your recipe photo…" : "Tap to add a recipe photo"}
               </span>
             </span>
-            <IconChevronRight />
+            <IconChevronRight color="#C9C6BC" size={16} />
           </button>
 
           {status.kind === "error" && <p className="error-text">{status.message}</p>}
@@ -1125,19 +1251,21 @@ export default function App() {
 
           <button className="pantry-cta" onClick={() => goTo("kitchenScan")} disabled={status.kind === "scanning"}>
             <span className="pantry-cta-icon">
-              <IconFridge color="currentColor" />
+              <IconBook color="var(--accent-deep)" size={27} strokeWidth={1.6} />
             </span>
             <span className="pantry-cta-text">
               <span className="pantry-cta-title">What's in my kitchen?</span>
               <span className="pantry-cta-subtitle">Snap your shelves so we don't double up</span>
             </span>
-            <IconChevronRight color="#c7c7cc" />
+            <IconChevronRight color="#8FB5A6" />
           </button>
 
           <div className="shortcuts-label">SHORTCUTS</div>
           <div className="shortcuts-card">
             <button className="shortcut-row" onClick={() => goTo("list")}>
-              <IconCart color="#4a4a4a" />
+              <span className="icon-strip" style={{ background: "var(--strip-mint)" }}>
+                <IconCart color="var(--accent-deep)" size={30} strokeWidth={1.6} />
+              </span>
               <span className="shortcut-text">
                 <span className="shortcut-title">Current List</span>
                 <span className="shortcut-sub">{totalCount === 0 ? "No items yet" : `${checkedCount} / ${totalCount} picked up`}</span>
@@ -1151,7 +1279,9 @@ export default function App() {
                 goTo("recipes");
               }}
             >
-              <IconBook color="#4a4a4a" />
+              <span className="icon-strip" style={{ background: "var(--strip-stone)" }}>
+                <IconBook color="var(--text)" size={32} strokeWidth={1.5} pageLines />
+              </span>
               <span className="shortcut-text">
                 <span className="shortcut-title">Your Recipes</span>
                 <span className="shortcut-sub">{recipes.length === 0 ? "None saved yet" : `${recipes.length} saved`}</span>
@@ -1165,7 +1295,9 @@ export default function App() {
                 goTo("recipes");
               }}
             >
-              <IconStar color="#4a4a4a" />
+              <span className="icon-strip" style={{ background: "var(--strip-honey)" }}>
+                <IconStar color="var(--icon-star)" size={30} filled />
+              </span>
               <span className="shortcut-text">
                 <span className="shortcut-title">Favorites</span>
                 <span className="shortcut-sub">{favoriteCount === 0 ? "None starred yet" : `${favoriteCount} starred`}</span>
@@ -1173,7 +1305,9 @@ export default function App() {
               <IconChevronRight />
             </button>
             <button className="shortcut-row" onClick={() => goTo("kitchen")}>
-              <IconFridge color="#4a4a4a" />
+              <span className="icon-strip" style={{ background: "var(--strip-sand)" }}>
+                <IconFridge color="var(--icon-kitchen)" size={30} strokeWidth={1.6} />
+              </span>
               <span className="shortcut-text">
                 <span className="shortcut-title">My Kitchen</span>
                 <span className="shortcut-sub">
@@ -1182,25 +1316,11 @@ export default function App() {
               </span>
               <IconChevronRight />
             </button>
-            <div className="shortcut-row disabled">
-              <IconNote />
-              <span className="shortcut-text">
-                <span className="shortcut-title">Notes</span>
-                <span className="shortcut-sub">Nothing to share yet</span>
-              </span>
-            </div>
-            <div className="shortcut-row disabled">
-              <IconReminder />
-              <span className="shortcut-text">
-                <span className="shortcut-title">Reminders</span>
-                <span className="shortcut-sub">Nothing to share yet</span>
-              </span>
-            </div>
           </div>
 
           <div className="tip-card">
-            <IconTip />
-            <span>Ingredients from multiple recipes merge automatically into one list — no duplicate entries to clean up.</span>
+            <IconTip color="var(--tip-icon)" size={20} />
+            <span>Ingredients from multiple recipes merge automatically — no duplicate entries to clean up.</span>
           </div>
         </div>
       )}
@@ -1210,9 +1330,11 @@ export default function App() {
         <div className="screen">
           <header className="page-header">
             <button className="back-link" onClick={() => goTo("home")} aria-label="Back home">
-              ‹
+              <IconChevronLeft />
             </button>
-            <h1>Grocery Scanner</h1>
+            <h1>
+              <Wordmark small />
+            </h1>
             <div className="header-pills">
               <button
                 className="pill-chip"
@@ -1221,22 +1343,16 @@ export default function App() {
                   goTo("recipes");
                 }}
               >
-                <IconBook color="currentColor" /> Recipes
+                <IconBook size={17} /> Recipes
               </button>
-              <button
-                className="pill-chip"
-                onClick={() => {
-                  setRecipeFilter("favorites");
-                  goTo("recipes");
-                }}
-              >
-                <IconStar color="currentColor" /> Favorites
+              <button className="circle-icon-button" onClick={() => goTo("help")} aria-label="Help & Settings">
+                <IconHelp />
               </button>
             </div>
           </header>
 
           <button className="add-another-pill" onClick={openScanner} disabled={status.kind === "scanning"}>
-            <IconCamera color="currentColor" />
+            <IconCamera color="var(--accent)" />
             {status.kind === "scanning" ? "Working…" : "Add another recipe"}
           </button>
 
@@ -1259,25 +1375,25 @@ export default function App() {
                 <span className="progress-text">
                   {checkedCount} / {totalCount} picked up
                 </span>
-                <div className="toolbar-buttons">
-                  <button onClick={handleShare} className="secondary-button">
-                    Share
+                <button onClick={handleShare} className="secondary-button">
+                  Share
+                </button>
+              </div>
+              <div className="list-subtoolbar">
+                <button onClick={() => setAddItemOpen((v) => !v)} className="secondary-button small">
+                  + Add item
+                </button>
+                <button onClick={handleDownload} className="secondary-button small">
+                  .txt
+                </button>
+                {checkedCount > 0 && (
+                  <button onClick={clearChecked} className="secondary-button small">
+                    Clear checked
                   </button>
-                  <button onClick={handleDownload} className="secondary-button">
-                    .txt
-                  </button>
-                  {checkedCount > 0 && (
-                    <button onClick={clearChecked} className="secondary-button">
-                      Clear checked
-                    </button>
-                  )}
-                  <button onClick={clearAll} className="secondary-button danger">
-                    Clear all
-                  </button>
-                  <button onClick={() => setAddItemOpen((v) => !v)} className="secondary-button">
-                    + Add item
-                  </button>
-                </div>
+                )}
+                <button onClick={clearAll} className="secondary-button small danger">
+                  Clear all
+                </button>
               </div>
 
               {addItemOpen && (
@@ -1327,31 +1443,35 @@ export default function App() {
               )}
 
               {recipeNamesInCurrentList.length > 0 && (
-                <div className="recipe-chip-row">
-                  <button
-                    className={`recipe-chip ${recipeChips.size === 0 ? "recipe-chip-active" : ""}`}
-                    onClick={() => setRecipeChips(new Set())}
-                  >
-                    All
-                  </button>
-                  {recipeNamesInCurrentList.map((name) => (
-                    <span key={name} className="recipe-chip-wrap">
-                      <button
-                        className={`recipe-chip ${recipeChips.has(name) ? "recipe-chip-active" : ""}`}
-                        onClick={() => toggleRecipeChip(name)}
-                      >
-                        {name}
-                      </button>
-                      <button
-                        className="recipe-chip-remove"
-                        onClick={() => removeRecipeByName(name)}
-                        aria-label={`Clear "${name}" from your list`}
-                        title={`Not shopping for "${name}" this week — clear its items`}
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  ))}
+                <div
+                  className={`recipe-chip-rail${chipRailFades.left ? " fade-left" : ""}${chipRailFades.right ? " fade-right" : ""}`}
+                >
+                  <div className="recipe-chip-row" ref={chipRailRef} onScroll={onChipRailScroll}>
+                    <button
+                      className={`recipe-chip ${recipeChips.size === 0 ? "recipe-chip-active" : ""}`}
+                      onClick={() => setRecipeChips(new Set())}
+                    >
+                      All
+                    </button>
+                    {recipeNamesInCurrentList.map((name) => (
+                      <span key={name} className="recipe-chip-wrap">
+                        <button
+                          className={`recipe-chip ${recipeChips.has(name) ? "recipe-chip-active" : ""}`}
+                          onClick={() => toggleRecipeChip(name)}
+                        >
+                          {name}
+                        </button>
+                        <button
+                          className="remove-circle"
+                          onClick={() => removeRecipeByName(name)}
+                          aria-label={`Clear "${name}" from your list`}
+                          title={`Not shopping for "${name}" this week — clear its items`}
+                        >
+                          <IconX />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -1406,41 +1526,31 @@ export default function App() {
                               <label className="item-label">
                                 <input type="checkbox" checked={item.checked} onChange={() => toggleChecked(item.id)} />
                                 <span className="item-text">
-                                  <span className="item-name">{item.name}</span>
-                                  {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
-                                  {item.note && <span className="item-note"> ({item.note})</span>}
+                                  <span className="item-line">
+                                    <span className="item-name">{item.name}</span>
+                                    {formatListQuantity(item) && <span className="item-qty"> — {formatListQuantity(item)}</span>}
+                                    {item.note && <span className="item-note"> ({item.note})</span>}
+                                  </span>
+                                  <span className="item-source">{item.sourceRecipes.join(", ")}</span>
                                   {pendingRemovalIds.has(item.id) && (
                                     <span className="pending-removal-note">Removing in 10s — uncheck to keep it</span>
                                   )}
-                                  {item.sourceRecipes.length > 1 && (
-                                    <span className="shared-badge">
-                                      <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#5b6fa0" strokeWidth="2.4">
-                                        <circle cx="9" cy="12" r="6" />
-                                        <circle cx="15" cy="12" r="6" />
-                                      </svg>
-                                      {item.sourceRecipes.length} recipes
-                                    </span>
-                                  )}
-                                  {kitchenKeySet.has(simpleNameKey(item.name)) && (
-                                    <span className="kitchen-flag-badge">
-                                      <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="#a8752f" strokeWidth="2.4">
-                                        <rect x="5" y="2.5" width="14" height="19" rx="2.2" />
-                                        <line x1="5" y1="9.5" x2="19" y2="9.5" />
-                                      </svg>
-                                      In your kitchen — check amount
-                                    </span>
-                                  )}
-                                  <span className="item-source">{item.sourceRecipes.join(", ")}</span>
                                 </span>
                               </label>
                               <div className="item-row-actions">
+                                {item.sourceRecipes.length > 1 && <SharedRecipeBadge count={item.sourceRecipes.length} />}
+                                {kitchenKeySet.has(simpleNameKey(item.name)) && (
+                                  <span className="kitchen-badge" title="In your kitchen — check the amount">
+                                    <IconFridge color="var(--icon-kitchen)" size={30} strokeWidth={1.6} />
+                                  </span>
+                                )}
                                 {!pendingRemovalIds.has(item.id) && (
                                   <button className="edit-button" onClick={() => startEditListItem(item)} aria-label={`Edit ${item.name}`}>
                                     ✎
                                   </button>
                                 )}
-                                <button className="remove-button" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.name}`}>
-                                  ✕
+                                <button className="remove-circle" onClick={() => removeItem(item.id)} aria-label={`Remove ${item.name}`}>
+                                  <IconX />
                                 </button>
                               </div>
                             </li>
@@ -1465,7 +1575,7 @@ export default function App() {
         <div className="screen">
           <header className="page-header">
             <button className="back-link" onClick={() => goTo("home")} aria-label="Back home">
-              ‹
+              <IconChevronLeft />
             </button>
             <h1>Your recipes</h1>
             <button className="add-new-pill" onClick={() => goTo("home")}>
@@ -1582,7 +1692,7 @@ export default function App() {
         <div className="screen">
           <header className="page-header">
             <button className="back-link" onClick={() => goTo("home")} aria-label="Back home">
-              ‹
+              <IconChevronLeft />
             </button>
             <h1>My Kitchen</h1>
           </header>
@@ -1590,14 +1700,14 @@ export default function App() {
           <p className="subtitle">What's already in your fridge and pantry, so recipes can flag what you don't need to buy.</p>
 
           <div className="kitchen-toolbar">
-            <button className="secondary-button primary-ish" onClick={() => goTo("kitchenScan")}>
-              <IconCamera color="currentColor" /> Snap new pics
+            <button className="snap-button" onClick={() => goTo("kitchenScan")}>
+              <IconCamera color="#ffffff" size={20} strokeWidth={1.8} /> Snap new pics
             </button>
             <button className="secondary-button" onClick={() => setAddKitchenItemOpen((v) => !v)}>
               + Add item
             </button>
             {kitchen.length > 0 && (
-              <button className="secondary-button danger" onClick={clearKitchen}>
+              <button className="secondary-button small danger kitchen-clear" onClick={clearKitchen}>
                 Clear my kitchen
               </button>
             )}
@@ -1714,14 +1824,19 @@ export default function App() {
                         {item.confidence === "low" && <span className="confidence-badge">best guess</span>}
                       </div>
                       <div className="kitchen-row-actions">
-                        <button className="secondary-button" onClick={() => moveKitchenItemToList(item)}>
-                          Ran out — add to list
+                        <button
+                          className="ran-out-button"
+                          onClick={() => moveKitchenItemToList(item)}
+                          aria-label={`Ran out of ${item.name} — add it to the list`}
+                          title="Ran out — add to list"
+                        >
+                          <RanOutMark />
                         </button>
                         <button className="edit-button" onClick={() => startEditKitchenItem(item)} aria-label={`Edit ${item.name}`}>
                           ✎
                         </button>
-                        <button className="remove-button" onClick={() => deleteKitchenItem(item.id)} aria-label={`Remove ${item.name}`}>
-                          ✕
+                        <button className="remove-circle" onClick={() => deleteKitchenItem(item.id)} aria-label={`Remove ${item.name}`}>
+                          <IconX />
                         </button>
                       </div>
                     </div>
@@ -1737,7 +1852,7 @@ export default function App() {
         <div className="screen">
           <header className="page-header">
             <button className="back-link" onClick={() => goTo("kitchen")} aria-label="Back">
-              ‹
+              <IconChevronLeft />
             </button>
             <h1>What's in my kitchen?</h1>
           </header>
@@ -1787,7 +1902,7 @@ export default function App() {
         <div className="screen">
           <header className="page-header">
             <button className="back-link" onClick={cancelKitchenReview} aria-label="Back">
-              ‹
+              <IconChevronLeft />
             </button>
             <h1>Check what we found</h1>
           </header>
@@ -1817,8 +1932,8 @@ export default function App() {
                   }}
                 />
                 {item.confidence === "low" && <span className="confidence-badge">best guess</span>}
-                <button className="remove-button" onClick={() => removePantryReviewItem(item.id)} aria-label={`Remove ${item.name || "item"}`}>
-                  ✕
+                <button className="remove-circle" onClick={() => removePantryReviewItem(item.id)} aria-label={`Remove ${item.name || "item"}`}>
+                  <IconX />
                 </button>
               </div>
             ))}
@@ -1843,23 +1958,105 @@ export default function App() {
         </div>
       )}
 
+      {/* ---------------- HELP & SETTINGS ---------------- */}
+      {view === "help" && (
+        <div className="screen">
+          <header className="page-header">
+            <button className="back-link" onClick={() => goTo(helpReturnView.current)} aria-label="Back">
+              <IconChevronLeft />
+            </button>
+            <h1>Help &amp; Settings</h1>
+          </header>
+
+          <div className="settings-label">What the icons mean</div>
+          <div className="settings-card">
+            <div className="settings-row">
+              <span className="icon-strip" style={{ background: "var(--strip-honey)" }}>
+                <IconFridge color="var(--icon-kitchen)" size={28} strokeWidth={1.6} />
+              </span>
+              <span className="settings-text">
+                <span className="settings-title">In your kitchen</span>
+                <span className="settings-caption">Double-check the amount</span>
+              </span>
+            </div>
+            <div className="settings-row">
+              <span className="icon-strip" style={{ background: "var(--strip-slate)" }}>
+                <SharedRecipeBadge count={2} iconSize={28} />
+              </span>
+              <span className="settings-text">
+                <span className="settings-title">Shared recipe</span>
+                <span className="settings-caption">Needed by more than one</span>
+              </span>
+            </div>
+            <div className="settings-row">
+              <span className="icon-strip" style={{ background: "var(--strip-stone)" }}>
+                <span className="ran-out-icon">
+                  <RanOutMark size={26} />
+                </span>
+              </span>
+              <span className="settings-text">
+                <span className="settings-title">Ran out</span>
+                <span className="settings-caption">Tap to add back to the list</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="settings-label">Family share</div>
+          <div className="settings-card">
+            <div className="settings-row">
+              <span className="icon-strip" style={{ background: "var(--strip-mint)" }}>
+                <IconPeople color="var(--accent-deep)" />
+              </span>
+              <span className="settings-text">
+                <span className="settings-title">Share with family</span>
+                <span className="settings-caption">Coming soon</span>
+              </span>
+            </div>
+            <button className="settings-wide-button" disabled>
+              Invite household members
+            </button>
+          </div>
+
+          <div className="settings-label">Appearance</div>
+          <div className="settings-card">
+            <div className="settings-row">
+              <span className="icon-strip" style={{ background: "var(--strip-stone)" }}>
+                <IconMoon color="var(--text)" />
+              </span>
+              <span className="settings-text">
+                <span className="settings-title">Dark mode</span>
+              </span>
+              <button
+                className={`toggle-switch${darkModePreview ? " on" : ""}`}
+                role="switch"
+                aria-checked={darkModePreview}
+                aria-label="Dark mode"
+                onClick={() => setDarkModePreview((v) => !v)}
+              >
+                <span className="toggle-thumb" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ---------------- FLOATING GROCERY-LIST PILL (every screen) ---------------- */}
       <div className="floating-pill">
         {view === "list" ? (
           <button className="pill-quick-access" onClick={() => setSheetOpen(true)}>
-            <IconChevronUp color="#3f8f7f" />
+            <IconChevronUp color="var(--accent)" />
             Quick Access
           </button>
         ) : (
           <>
             <button className="pill-segment-list" onClick={() => goTo("list")}>
-              <IconCart />
+              <IconCart color="var(--accent)" size={19} />
               <span className="pill-title">Grocery List</span>
               <span className="pill-status">· {pillLabel}</span>
             </button>
             <div className="pill-divider" />
             <button className="pill-segment-chevron" onClick={() => setSheetOpen(true)} aria-label="Quick access">
-              <IconChevronUp />
+              <IconChevronUp color="#ffffff" />
             </button>
           </>
         )}
@@ -1883,7 +2080,7 @@ export default function App() {
             <div className="sheet-section-label">Go to</div>
             <div className="sheet-nav-list">
               <button className="sheet-nav-row highlight" onClick={() => goTo("list")}>
-                <IconCart />
+                <IconCart color="var(--accent)" />
                 <span className="sheet-nav-text">
                   Current List <span className="sheet-nav-sub">· {pillLabel}</span>
                 </span>
