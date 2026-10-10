@@ -2040,27 +2040,20 @@ export default function App() {
         </div>
       )}
 
-      {/* ---------------- FLOATING GROCERY-LIST PILL (every screen) ---------------- */}
-      <div className="floating-pill">
-        {view === "list" ? (
-          <button className="pill-quick-access" onClick={() => setSheetOpen(true)}>
-            <IconChevronUp color="var(--accent)" />
-            Quick Access
+      {/* ---------------- FLOATING GROCERY-LIST PILL (every screen except the list itself) ---------------- */}
+      {view !== "list" && (
+        <div className="floating-pill">
+          <button className="pill-segment-list" onClick={() => goTo("list")}>
+            <IconCart color="var(--accent)" size={19} />
+            <span className="pill-title">Grocery List</span>
+            <span className="pill-status">· {pillLabel}</span>
           </button>
-        ) : (
-          <>
-            <button className="pill-segment-list" onClick={() => goTo("list")}>
-              <IconCart color="var(--accent)" size={19} />
-              <span className="pill-title">Grocery List</span>
-              <span className="pill-status">· {pillLabel}</span>
-            </button>
-            <div className="pill-divider" />
-            <button className="pill-segment-chevron" onClick={() => setSheetOpen(true)} aria-label="Quick access">
-              <IconChevronUp color="#ffffff" />
-            </button>
-          </>
-        )}
-      </div>
+          <div className="pill-divider" />
+          <button className="pill-segment-chevron" onClick={() => setSheetOpen(true)} aria-label="Quick access">
+            <IconChevronUp color="#ffffff" />
+          </button>
+        </div>
+      )}
 
       {/* ---------------- QUICK ACCESS SHEET ---------------- */}
       {sheetOpen && (
