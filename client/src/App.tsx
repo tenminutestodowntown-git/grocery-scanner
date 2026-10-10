@@ -488,6 +488,8 @@ export default function App() {
   const [view, setView] = useState<View>("home");
   // Help & Settings "Dark mode" switch — UI-only for now; real theming is a future task.
   const [darkModePreview, setDarkModePreview] = useState(false);
+  // A "ran out" restock whose background save failed — shown inline on My Kitchen with a Retry.
+  const [restockError, setRestockError] = useState<{ item: KitchenItem; message: string } | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [recipeChips, setRecipeChips] = useState<Set<string>>(new Set());
   const [addItemOpen, setAddItemOpen] = useState(false);
@@ -540,6 +542,13 @@ export default function App() {
     saveList(list);
     listRef.current = list;
   }, [list]);
+
+  // iOS Safari only applies :active (our tap press-in styles) once some touchstart listener exists.
+  useEffect(() => {
+    const noop = () => {};
+    document.addEventListener("touchstart", noop, { passive: true });
+    return () => document.removeEventListener("touchstart", noop);
+  }, []);
 
   // Cancel any pending 10s removals if the app unmounts, so they can't fire against
   // state that no longer exists.
@@ -1057,21 +1066,127 @@ export default function App() {
     setKitchen((prev) => prev.filter((item) => item.id !== id));
   }
 
-  async function moveKitchenItemToList(item: KitchenItem) {
-    setStatus({ kind: "scanning" });
-    try {
-      const result = await mergeRecipeIntoList(
-        [{ name: item.name, quantity: item.quantity, unit: item.unit, note: null, aisle: item.aisle }],
-        RAN_OUT_SOURCE,
-        list
-      );
-      setList(result.list);
-      setKitchen((prev) => prev.filter((k) => k.id !== item.id));
-      setStatus({ kind: "idle" });
-      setToast(`Added "${item.name}" to your grocery list`);
-    } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Something went wrong" });
+  // "Ran out" restocks are applied to the screen instantly, then confirmed by the server's merge in
+  // the background. Each in-flight restock remembers what it changed so the server call can be made
+  // against the list as it was *before* the optimistic edit (no double-counting), and so a failure
+  // can be undone. Requests run one at a time so rapid taps don't overwrite each other's results.
+  type PendingRestock = { item: KitchenItem; provisionalId: string | null; originalLine: Ingredient | null };
+  const pendingRestocks = useRef(new Map<string, PendingRestock>());
+  const restockQueue = useRef<Promise<void>>(Promise.resolve());
+
+  function commitList(next: Ingredient[]) {
+    listRef.current = next; // keep reads in the same tick (rapid taps) in sync before the effect runs
+    setList(next);
+  }
+
+  /** The list as the server should see it: every pending restock's optimistic edit undone. */
+  function listWithoutPendingRestocks(current: Ingredient[]): Ingredient[] {
+    const provisional = new Set<string>();
+    const originals = new Map<string, Ingredient>();
+    for (const p of pendingRestocks.current.values()) {
+      if (p.provisionalId) provisional.add(p.provisionalId);
+      if (p.originalLine) originals.set(p.originalLine.id, p.originalLine);
     }
+    return current
+      .filter((i) => !provisional.has(i.id))
+      .map((i) => {
+        const original = originals.get(i.id);
+        return original ? { ...original, checked: i.checked } : i;
+      });
+  }
+
+  function moveKitchenItemToList(item: KitchenItem) {
+    const requestId = newId();
+    const current = listRef.current;
+    const key = simpleNameKey(item.name);
+    const match = current.find((i) => simpleNameKey(i.name) === key && !i.id.startsWith("pending-"));
+    const contribution = { recipeName: RAN_OUT_SOURCE, quantity: item.quantity, unit: item.unit, note: null };
+
+    // 1. Instant: drop it from My Kitchen and show it on the list (bumping an existing line, or a
+    //    provisional new one) before any network round-trip.
+    let optimistic: Ingredient[];
+    let pending: PendingRestock;
+    if (match) {
+      const sameUnit = match.unit === item.unit;
+      const quantity = sameUnit && match.quantity !== null && item.quantity !== null ? match.quantity + item.quantity : match.quantity;
+      const bumped: Ingredient = {
+        ...match,
+        quantity,
+        checked: false,
+        sourceRecipes: Array.from(new Set([...match.sourceRecipes, RAN_OUT_SOURCE])),
+        contributions: [...match.contributions, contribution],
+      };
+      optimistic = current.map((i) => (i.id === match.id ? bumped : i));
+      pending = { item, provisionalId: null, originalLine: match };
+    } else {
+      const provisionalId = `pending-${requestId}`;
+      optimistic = [
+        ...current,
+        {
+          id: provisionalId,
+          name: item.name,
+          quantity: item.quantity,
+          unit: item.unit,
+          note: null,
+          aisle: item.aisle,
+          checked: false,
+          sourceRecipes: [RAN_OUT_SOURCE],
+          contributions: [contribution],
+        },
+      ];
+      pending = { item, provisionalId, originalLine: null };
+    }
+    pendingRestocks.current.set(requestId, pending);
+    commitList(optimistic);
+    setKitchen((prev) => prev.filter((k) => k.id !== item.id));
+    setRestockError(null);
+    setToast(`Added "${item.name}" to your grocery list`);
+
+    // 2. Background: let the server do the real merge, then swap its result in for the guess.
+    restockQueue.current = restockQueue.current.then(async () => {
+      // Base = the list with every still-pending optimistic edit (this one included) undone.
+      const base = listWithoutPendingRestocks(listRef.current);
+      try {
+        const result = await mergeRecipeIntoList(
+          [{ name: item.name, quantity: item.quantity, unit: item.unit, note: null, aisle: item.aisle }],
+          RAN_OUT_SOURCE,
+          base
+        );
+        const baseIds = new Set(base.map((i) => i.id));
+        const resultById = new Map(result.list.map((i) => [i.id, i]));
+        const addedLines = result.list.filter((i) => !baseIds.has(i.id));
+        // Swap the server's version in for our guess, against the *latest* list so anything the
+        // user did in the meantime (checking items off, other restocks) is kept.
+        const reconciled: Ingredient[] = [];
+        for (const line of listRef.current) {
+          if (line.id === pending.provisionalId) {
+            reconciled.push(...addedLines.map((a) => ({ ...a, checked: line.checked })));
+          } else if (line.id === pending.originalLine?.id) {
+            const confirmed = resultById.get(line.id);
+            reconciled.push(confirmed ? { ...confirmed, checked: line.checked } : line);
+          } else {
+            reconciled.push(line);
+          }
+        }
+        // We guessed it would merge into an existing line but the server's stricter matching made a
+        // new one instead — show that new line too. (A provisional line the user already removed
+        // stays removed, since its replacement is only placed where the provisional line still is.)
+        if (pending.originalLine) reconciled.push(...addedLines);
+        pendingRestocks.current.delete(requestId);
+        commitList(reconciled);
+      } catch (err) {
+        pendingRestocks.current.delete(requestId);
+        // Roll back: take the line edit off the list and put the item back in My Kitchen.
+        const latest = listRef.current;
+        commitList(
+          latest
+            .filter((l) => l.id !== pending.provisionalId)
+            .map((l) => (pending.originalLine && l.id === pending.originalLine.id ? { ...pending.originalLine, checked: l.checked } : l))
+        );
+        setKitchen((prev) => (prev.some((k) => k.id === item.id) ? prev : [...prev, item]));
+        setRestockError({ item, message: err instanceof Error ? err.message : "Something went wrong" });
+      }
+    });
   }
 
   const totalCount = list.length;
@@ -1698,6 +1813,22 @@ export default function App() {
           </header>
 
           <p className="subtitle">What's already in your fridge and pantry, so recipes can flag what you don't need to buy.</p>
+
+          {restockError && (
+            <div className="inline-error" role="alert">
+              <span>
+                Couldn't add "{restockError.item.name}" to your list — it's back in My Kitchen. ({restockError.message})
+              </span>
+              <span className="inline-error-actions">
+                <button className="secondary-button small" onClick={() => moveKitchenItemToList(restockError.item)}>
+                  Retry
+                </button>
+                <button className="remove-circle" onClick={() => setRestockError(null)} aria-label="Dismiss">
+                  <IconX />
+                </button>
+              </span>
+            </div>
+          )}
 
           <div className="kitchen-toolbar">
             <button className="snap-button" onClick={() => goTo("kitchenScan")}>

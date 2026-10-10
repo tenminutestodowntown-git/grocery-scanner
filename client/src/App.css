@@ -1660,7 +1660,7 @@ textarea {
   background: var(--control-border);
   padding: 0;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, transform 100ms ease-out;
 }
 
 .toggle-switch.on {
@@ -1681,4 +1681,56 @@ textarea {
 
 .toggle-switch.on .toggle-thumb {
   transform: translateX(20px);
+}
+
+/* Inline, retryable error (e.g. a "ran out" restock that couldn't be saved). */
+.inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.inline-error-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ---------- Tap feedback ----------
+   A quick press-in on every button so taps are acknowledged even before anything else changes.
+   (App.tsx registers a passive touchstart listener so :active fires on iOS Safari.) */
+button,
+.item-label input[type="checkbox"] {
+  transition: transform 100ms ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled):active,
+.item-label:active input[type="checkbox"] {
+  transform: scale(0.94);
+}
+
+/* Full-width cards and rows get a gentler press so the whole card doesn't visibly shrink. */
+.cta-card:not(:disabled):active,
+.pantry-cta:not(:disabled):active,
+.shortcut-row:active,
+.sheet-nav-row:active {
+  transform: scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  .item-label input[type="checkbox"] {
+    transition: none;
+  }
 }
