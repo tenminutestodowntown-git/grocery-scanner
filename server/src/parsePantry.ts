@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { AISLES } from "./aisles.js";
+import { AISLES, AISLE_GUIDANCE } from "./aisles.js";
 import type { ParsePantryResponse } from "./types.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -17,6 +17,7 @@ For each item, return:
   "jar", "bottle") — never guess a cooking unit like cups or grams from a photo.
 - aisle: pick the SINGLE best match from this exact list (copy the string exactly):
 ${AISLES.map((a) => `  - "${a}"`).join("\n")}
+${AISLE_GUIDANCE}
 - confidence: "high" when you can read a label or the item is unmistakable from its shape/color (a banana, an egg
   carton, a milk jug). "low" when you're guessing from packaging shape/color alone with no readable label (an
   unlabeled jar of something, a plain squeeze bottle, a generic container) — still make your best guess, just mark

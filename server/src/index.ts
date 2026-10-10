@@ -4,6 +4,7 @@ import cors from "cors";
 import multer from "multer";
 import { parseRecipeImage } from "./parseRecipe.js";
 import { parsePantryImage } from "./parsePantry.js";
+import { categorizeItem } from "./categorizeItem.js";
 import { mergeIngredients, removeRecipeFromList } from "./merge.js";
 import type { Ingredient, ParsedIngredient, PantryItem } from "./types.js";
 
@@ -105,6 +106,25 @@ app.post("/api/scan-pantry", upload.array("photos", 6), async (req, res) => {
     }
 
     res.json({ items: Array.from(merged.values()) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });
+  }
+});
+
+// Best-guess aisle for a manually-typed item name, so manual adds get sorted into the same
+// aisles scanned items do. Text-only (no image); the client falls back to "Other" on failure.
+app.post("/api/categorize-item", async (req, res) => {
+  try {
+    const { name } = req.body as { name?: string };
+    if (typeof name !== "string" || name.trim().length === 0) {
+      return res.status(400).json({ error: "Expected { name }" });
+    }
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY" });
+    }
+    const aisle = await categorizeItem(name.trim().slice(0, 200));
+    res.json({ aisle });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err instanceof Error ? err.message : "Unknown error" });

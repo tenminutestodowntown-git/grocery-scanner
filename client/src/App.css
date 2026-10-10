@@ -580,6 +580,12 @@ body {
   flex: 1 1 140px;
 }
 
+.manual-aisle-hint {
+  flex: 1 1 100%;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .manual-add-actions {
   flex: 1 1 100%;
   display: flex;
@@ -1184,31 +1190,106 @@ body {
   cursor: pointer;
 }
 
-/* ---------- Shared big-ticket item confirmation modal ---------- */
-.meat-duplicate-modal {
+/* ---------- Shared-item duplicate review modal ---------- */
+.shared-duplicate-modal {
   width: calc(100% - 40px);
   max-width: 420px;
+  max-height: calc(100vh - 80px);
   margin: 0 auto;
   background: var(--card);
   border-radius: 18px;
   padding: 20px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
 }
 
-.meat-duplicate-title {
+.shared-duplicate-title {
   font-size: 16px;
   font-weight: 700;
   margin-bottom: 8px;
 }
 
-.meat-duplicate-text {
+.shared-duplicate-text {
   font-size: 13.5px;
   color: var(--muted);
   line-height: 1.5;
-  margin: 0 0 16px;
+  margin: 0 0 12px;
 }
 
-.meat-duplicate-actions {
+.shared-duplicate-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  overflow-y: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shared-duplicate-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.shared-duplicate-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.shared-duplicate-row.unchecked {
+  opacity: 0.65;
+}
+
+.shared-duplicate-pair {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.shared-duplicate-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.shared-duplicate-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.shared-duplicate-qty {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.shared-duplicate-source {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.shared-duplicate-hint {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.shared-duplicate-row.unchecked .shared-duplicate-hint {
+  color: var(--muted);
+}
+
+.shared-duplicate-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;

@@ -17,6 +17,7 @@ import {
   scanPantryPhotos,
   mergeRecipeIntoList,
   removeRecipeFromList as removeRecipeFromListApi,
+  categorizeItemName,
 } from "./api";
 import { shareOrCopyList, downloadListAsText } from "./export";
 import { resizeImage, dataUrlToBlob } from "./image";
@@ -150,14 +151,13 @@ function sharedItemKeyword(name: string): string | null {
   return null;
 }
 
-/** Finds the first pair of list lines (not already dismissed) that come from different recipes
- * but share the same specific "family" keyword — a likely case of the same thing getting
- * bought twice because two recipes named it slightly differently. Returns at most one candidate
- * at a time so only one prompt shows on screen at once. */
-function findSharedItemDuplicateCandidate(
-  items: Ingredient[],
-  dismissed: Set<string>
-): { a: Ingredient; b: Ingredient; keyword: string; pairKey: string } | null {
+type SharedItemCandidate = { a: Ingredient; b: Ingredient; keyword: string; pairKey: string };
+
+/** Finds every pair of list lines (not already dismissed) that share the same specific "family"
+ * keyword — a likely case of the same thing getting bought twice because two recipes named it
+ * slightly differently. Returns all of them so they can be reviewed together in one prompt. */
+function findAllSharedItemDuplicateCandidates(items: Ingredient[], dismissed: Set<string>): SharedItemCandidate[] {
+  const candidates: SharedItemCandidate[] = [];
   for (let i = 0; i < items.length; i++) {
     for (let j = i + 1; j < items.length; j++) {
       const a = items[i];
@@ -167,11 +167,11 @@ function findSharedItemDuplicateCandidate(
       const kwB = sharedItemKeyword(b.name);
       if (kwA && kwA === kwB) {
         const pairKey = [a.id, b.id].sort().join("::");
-        if (!dismissed.has(pairKey)) return { a, b, keyword: kwA, pairKey };
+        if (!dismissed.has(pairKey)) candidates.push({ a, b, keyword: kwA, pairKey });
       }
     }
   }
-  return null;
+  return candidates;
 }
 
 /** Folds two distinct list lines into one — used when the user says two differently-named
@@ -198,6 +198,93 @@ function combineTwoIngredients(a: Ingredient, b: Ingredient): Ingredient {
 // so making one recipe shouldn't wipe them out of My Kitchen. Everything else (produce, canned
 // goods, meat, dairy, frozen, etc.) is treated as used up when the recipe is made.
 const KITCHEN_KEEP_AISLES = new Set<string>(["Cooking Oils & Nut Butters", "Baking", "Bulk Foods (Nuts, Spices, etc.)"]);
+
+// Aisle guesses for manually-typed names, shared by both add forms and kept for the session so
+// re-typing the same item (or adding it to both the list and My Kitchen) doesn't re-ask the server.
+const aisleGuessCache = new Map<string, Promise<Aisle>>();
+
+function guessAisle(name: string): Promise<Aisle> {
+  const key = name.trim().toLowerCase();
+  let guess = aisleGuessCache.get(key);
+  if (!guess) {
+    guess = categorizeItemName(key).catch(() => {
+      aisleGuessCache.delete(key); // don't cache a failure — let the next try hit the server again
+      return "Other" as Aisle;
+    });
+    aisleGuessCache.set(key, guess);
+  }
+  return guess;
+}
+
+// How long "Add" will wait on an in-flight aisle guess before giving up and using "Other".
+const AISLE_GUESS_SUBMIT_WAIT_MS = 1500;
+
+/** Auto-fills a manual add form's aisle from the typed name: guesses after a short pause in
+ * typing (or right away on blur) so it's usually resolved before "Add" is tapped. Once the user
+ * picks an aisle themselves, their choice sticks and no further guesses overwrite it. */
+function useAutoAisle(name: string, setAisle: (aisle: Aisle) => void) {
+  const [userPicked, setUserPicked] = useState(false);
+  const [guessing, setGuessing] = useState(false);
+  const latestName = useRef(name);
+  latestName.current = name;
+  const userPickedRef = useRef(userPicked);
+  userPickedRef.current = userPicked;
+
+  function runGuess(forName: string): Promise<Aisle> {
+    const trimmed = forName.trim();
+    if (!trimmed) return Promise.resolve("Other");
+    setGuessing(true);
+    return guessAisle(trimmed).then((aisle) => {
+      // Ignore a stale answer for a name the user has since changed.
+      if (latestName.current.trim() === trimmed) {
+        setGuessing(false);
+        if (!userPickedRef.current) setAisle(aisle);
+      }
+      return aisle;
+    });
+  }
+
+  useEffect(() => {
+    if (userPicked) return;
+    if (!name.trim()) {
+      setGuessing(false);
+      return;
+    }
+    const timer = setTimeout(() => runGuess(name), 500);
+    return () => clearTimeout(timer);
+    // runGuess only reads refs + stable setters, so it's safe to leave out of the deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, userPicked]);
+
+  return {
+    guessing: guessing && !userPicked,
+    onNameBlur: () => {
+      if (!userPicked) runGuess(name);
+    },
+    onAisleChange: (aisle: Aisle) => {
+      setUserPicked(true);
+      setAisle(aisle);
+    },
+    /** The aisle to save with: the user's pick if they made one, otherwise the guess (waiting
+     * briefly if it's still in flight), falling back to "Other" so the add is never blocked.
+     * `lateGuess` is set when that fallback was used, so the caller can re-sort the saved item
+     * once the real guess arrives. */
+    aisleForSubmit: async (current: Aisle): Promise<{ aisle: Aisle; lateGuess: Promise<Aisle> | null }> => {
+      if (userPickedRef.current || !name.trim()) return { aisle: current, lateGuess: null };
+      const guess = guessAisle(name);
+      const timedOut = Symbol();
+      const first = await Promise.race([
+        guess,
+        new Promise<typeof timedOut>((resolve) => setTimeout(() => resolve(timedOut), AISLE_GUESS_SUBMIT_WAIT_MS)),
+      ]);
+      return first === timedOut ? { aisle: "Other", lateGuess: guess } : { aisle: first, lateGuess: null };
+    },
+    reset: () => {
+      setUserPicked(false);
+      setGuessing(false);
+    },
+  };
+}
 
 function newId(): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
@@ -300,7 +387,7 @@ export default function App() {
   const [manualName, setManualName] = useState("");
   const [manualQty, setManualQty] = useState("");
   const [manualUnit, setManualUnit] = useState("");
-  const [manualAisle, setManualAisle] = useState<Aisle>(AISLES[0]);
+  const [manualAisle, setManualAisle] = useState<Aisle>("Other");
   const [dragY, setDragY] = useState(0);
   const dragStartY = useRef<number | null>(null);
   const dragging = useRef(false);
@@ -312,7 +399,9 @@ export default function App() {
   const [manualKitchenName, setManualKitchenName] = useState("");
   const [manualKitchenQty, setManualKitchenQty] = useState("");
   const [manualKitchenUnit, setManualKitchenUnit] = useState("");
-  const [manualKitchenAisle, setManualKitchenAisle] = useState<Aisle>(AISLES[0]);
+  const [manualKitchenAisle, setManualKitchenAisle] = useState<Aisle>("Other");
+  const listAutoAisle = useAutoAisle(manualName, setManualAisle);
+  const kitchenAutoAisle = useAutoAisle(manualKitchenName, setManualKitchenAisle);
   // Inline-edit drafts: while non-null, the matching row renders editable inputs instead of
   // static text. Kept as a single draft object (not per-row state) since only one row is
   // ever edited at a time.
@@ -328,6 +417,9 @@ export default function App() {
   // want to buy separately — remembered per session so the same prompt doesn't nag them again
   // right after they answer it once.
   const [dismissedSharedItemPairs, setDismissedSharedItemPairs] = useState<Set<string>>(new Set());
+  // Rows in the open duplicate review that the user unticked ("keep separate"). Tracked as the
+  // unchecked set so every new candidate row starts out checked by default.
+  const [uncheckedSharedItemPairs, setUncheckedSharedItemPairs] = useState<Set<string>>(new Set());
   // Checking an item off doesn't remove it right away — it's marked checked and given a
   // 10s grace window (in case the tap was accidental) before it's actually dropped from the
   // list and tracked into My Kitchen. Unchecking within that window just undoes the check
@@ -578,17 +670,28 @@ export default function App() {
     setStatus({ kind: "scanning" });
     try {
       const qty = manualQty.trim() ? Number(manualQty.trim()) : null;
+      const { aisle, lateGuess } = await listAutoAisle.aisleForSubmit(manualAisle);
       const result = await mergeRecipeIntoList(
-        [{ name, quantity: Number.isFinite(qty) ? qty : null, unit: manualUnit.trim() || null, note: null, aisle: manualAisle }],
+        [{ name, quantity: Number.isFinite(qty) ? qty : null, unit: manualUnit.trim() || null, note: null, aisle }],
         MANUAL_ENTRY_SOURCE,
         list
       );
       setList(result.list);
+      // Saved as "Other" because the guess was slow — move it once the guess lands, unless
+      // it's been re-sorted by hand in the meantime. (Hooked up after setList above so the
+      // merged list can't overwrite the correction.)
+      lateGuess?.then((late) => {
+        if (late === "Other") return;
+        const key = simpleNameKey(name);
+        setList((prev) => prev.map((i) => (simpleNameKey(i.name) === key && i.aisle === "Other" ? { ...i, aisle: late } : i)));
+      });
       setStatus({ kind: "idle" });
       setToast(`Added "${name}"`);
       setManualName("");
       setManualQty("");
       setManualUnit("");
+      setManualAisle("Other");
+      listAutoAisle.reset();
       setAddItemOpen(false);
     } catch (err) {
       setStatus({ kind: "error", message: err instanceof Error ? err.message : "Something went wrong" });
@@ -736,12 +839,20 @@ export default function App() {
     goTo("kitchen");
   }
 
-  function handleManualKitchenAdd() {
+  async function handleManualKitchenAdd() {
     const name = manualKitchenName.trim();
     if (!name) return;
     const qtyNum = manualKitchenQty.trim() ? Number(manualKitchenQty.trim()) : null;
     const quantity = qtyNum !== null && Number.isFinite(qtyNum) ? qtyNum : null;
     const unit = manualKitchenUnit.trim() || null;
+    const { aisle, lateGuess } = await kitchenAutoAisle.aisleForSubmit(manualKitchenAisle);
+    // Saved as "Other" because the guess was slow — move it once the guess lands, unless
+    // it's been re-sorted by hand in the meantime.
+    lateGuess?.then((late) => {
+      if (late === "Other") return;
+      const key = simpleNameKey(name);
+      setKitchen((prev) => prev.map((k) => (simpleNameKey(k.name) === key && k.aisle === "Other" ? { ...k, aisle: late } : k)));
+    });
 
     setKitchen((prev) => {
       const key = simpleNameKey(name);
@@ -758,13 +869,15 @@ export default function App() {
         next[existingIdx] = { ...existing, quantity: combinedQty, unit: unit ?? existing.unit, addedAt: Date.now() };
         return next;
       }
-      return [...prev, { id: newId(), name, quantity, unit, aisle: manualKitchenAisle, addedAt: Date.now() }];
+      return [...prev, { id: newId(), name, quantity, unit, aisle, addedAt: Date.now() }];
     });
 
     setToast(`Added "${name}" to My Kitchen`);
     setManualKitchenName("");
     setManualKitchenQty("");
     setManualKitchenUnit("");
+    setManualKitchenAisle("Other");
+    kitchenAutoAisle.reset();
     setAddKitchenItemOpen(false);
   }
 
@@ -863,18 +976,65 @@ export default function App() {
   const recipeNamesInCurrentList = Array.from(new Set(list.flatMap((item) => item.sourceRecipes))).sort();
   const displayedList = recipeChips.size === 0 ? list : list.filter((item) => item.sourceRecipes.some((n) => recipeChips.has(n)));
   const kitchenKeySet = new Set(kitchen.map((k) => simpleNameKey(k.name)));
-  const sharedItemCandidate = findSharedItemDuplicateCandidate(list, dismissedSharedItemPairs);
+  // Recomputed from the list on every render, so any change that introduces a new pair (a scan,
+  // a manual add, a "ran out" move) shows up as another row in the same open review.
+  const sharedItemCandidates = findAllSharedItemDuplicateCandidates(list, dismissedSharedItemPairs);
 
-  function resolveSharedItemDuplicate(action: "separate" | "combine") {
-    if (!sharedItemCandidate) return;
-    const { a, b, pairKey } = sharedItemCandidate;
-    if (action === "separate") {
-      setDismissedSharedItemPairs((prev) => new Set(prev).add(pairKey));
-      return;
+  /** Applies the whole duplicate review in one go: checked pairs get combined, unchecked pairs
+   * are dismissed for the session. Checked pairs that overlap (e.g. three olive oils → A+B, A+C,
+   * B+C) are grouped so each connected group folds into a single line. */
+  function resolveSharedItemDuplicates() {
+    const parent = new Map<string, string>();
+    const find = (id: string): string => {
+      while (parent.has(id) && parent.get(id) !== id) id = parent.get(id)!;
+      return id;
+    };
+    const toDismiss: string[] = [];
+    for (const c of sharedItemCandidates) {
+      if (uncheckedSharedItemPairs.has(c.pairKey)) {
+        toDismiss.push(c.pairKey);
+        continue;
+      }
+      if (!parent.has(c.a.id)) parent.set(c.a.id, c.a.id);
+      if (!parent.has(c.b.id)) parent.set(c.b.id, c.b.id);
+      parent.set(find(c.b.id), find(c.a.id));
     }
-    const combined = combineTwoIngredients(a, b);
-    setList((prev) => [...prev.filter((i) => i.id !== a.id && i.id !== b.id), combined]);
-    setToast(`Combined into one "${combined.name}"`);
+
+    const groups = new Map<string, string[]>();
+    for (const id of parent.keys()) {
+      const root = find(id);
+      groups.set(root, [...(groups.get(root) ?? []), id]);
+    }
+
+    if (groups.size > 0) {
+      setList((prev) => {
+        const mergedAway = new Set<string>();
+        const replacements = new Map<string, Ingredient>();
+        for (const ids of groups.values()) {
+          // Fold in list order so the earliest line's name/unit wins, same as the old one-pair flow.
+          const members = prev.filter((i) => ids.includes(i.id));
+          if (members.length < 2) continue;
+          const combined = members.slice(1).reduce((acc, item) => combineTwoIngredients(acc, item), members[0]);
+          replacements.set(members[0].id, combined);
+          members.slice(1).forEach((m) => mergedAway.add(m.id));
+        }
+        return prev.filter((i) => !mergedAway.has(i.id)).map((i) => replacements.get(i.id) ?? i);
+      });
+    }
+    if (toDismiss.length > 0) setDismissedSharedItemPairs((prev) => new Set([...prev, ...toDismiss]));
+    setUncheckedSharedItemPairs(new Set());
+
+    const combinedCount = Array.from(groups.values()).filter((ids) => ids.length > 1).length;
+    if (combinedCount > 0) setToast(`Combined ${combinedCount} duplicate${combinedCount === 1 ? "" : "s"}`);
+  }
+
+  function toggleSharedItemPair(pairKey: string) {
+    setUncheckedSharedItemPairs((prev) => {
+      const next = new Set(prev);
+      if (next.has(pairKey)) next.delete(pairKey);
+      else next.add(pairKey);
+      return next;
+    });
   }
 
   function goTo(v: View) {
@@ -1127,6 +1287,7 @@ export default function App() {
                     placeholder="Ingredient name"
                     value={manualName}
                     onChange={(e) => setManualName(e.target.value)}
+                    onBlur={listAutoAisle.onNameBlur}
                     autoFocus
                   />
                   <input
@@ -1145,7 +1306,7 @@ export default function App() {
                   <select
                     className="manual-input manual-input-aisle"
                     value={manualAisle}
-                    onChange={(e) => setManualAisle(e.target.value as Aisle)}
+                    onChange={(e) => listAutoAisle.onAisleChange(e.target.value as Aisle)}
                   >
                     {AISLES.map((a) => (
                       <option key={a} value={a}>
@@ -1153,6 +1314,7 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                  {listAutoAisle.guessing && <div className="manual-aisle-hint">Picking an aisle…</div>}
                   <div className="manual-add-actions">
                     <button className="secondary-button" onClick={() => setAddItemOpen(false)}>
                       Cancel
@@ -1448,6 +1610,7 @@ export default function App() {
                 placeholder="Item name"
                 value={manualKitchenName}
                 onChange={(e) => setManualKitchenName(e.target.value)}
+                onBlur={kitchenAutoAisle.onNameBlur}
                 autoFocus
               />
               <input
@@ -1466,7 +1629,7 @@ export default function App() {
               <select
                 className="manual-input manual-input-aisle"
                 value={manualKitchenAisle}
-                onChange={(e) => setManualKitchenAisle(e.target.value as Aisle)}
+                onChange={(e) => kitchenAutoAisle.onAisleChange(e.target.value as Aisle)}
               >
                 {AISLES.map((a) => (
                   <option key={a} value={a}>
@@ -1474,6 +1637,7 @@ export default function App() {
                   </option>
                 ))}
               </select>
+              {kitchenAutoAisle.guessing && <div className="manual-aisle-hint">Picking an aisle…</div>}
               <div className="manual-add-actions">
                 <button className="secondary-button" onClick={() => setAddKitchenItemOpen(false)}>
                   Cancel
@@ -1786,23 +1950,42 @@ export default function App() {
         </div>
       )}
 
-      {/* ---------------- SHARED-ITEM CONFIRMATION (meat/seafood cuts named differently by 2 recipes) ---------------- */}
-      {sharedItemCandidate && (
-        <div className="sheet-overlay" onClick={() => resolveSharedItemDuplicate("separate")}>
-          <div className="meat-duplicate-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="meat-duplicate-title">Buying two of the same thing?</div>
-            <p className="meat-duplicate-text">
-              We noticed 2 recipes both call for {sharedItemCandidate.keyword} — "{sharedItemCandidate.a.name}" (
-              {sharedItemCandidate.a.sourceRecipes.join(", ")}) and "{sharedItemCandidate.b.name}" (
-              {sharedItemCandidate.b.sourceRecipes.join(", ")}). Do you want to buy both, or are you planning to
-              share one across the two recipes?
+      {/* ---------------- SHARED-ITEM REVIEW (every likely-duplicate pair, reviewed in one pop-up) ---------------- */}
+      {sharedItemCandidates.length > 0 && (
+        <div className="sheet-overlay">
+          <div className="shared-duplicate-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="shared-duplicate-title">Possible duplicate purchases</div>
+            <p className="shared-duplicate-text">
+              These items look like the same thing named differently. Checked pairs will be combined into one
+              line; untick any you really want to buy separately.
             </p>
-            <div className="meat-duplicate-actions">
-              <button className="secondary-button" onClick={() => resolveSharedItemDuplicate("separate")}>
-                Buy both
-              </button>
-              <button className="secondary-button primary-ish" onClick={() => resolveSharedItemDuplicate("combine")}>
-                Just get one
+            <ul className="shared-duplicate-list">
+              {sharedItemCandidates.map((c) => {
+                const checked = !uncheckedSharedItemPairs.has(c.pairKey);
+                return (
+                  <li key={c.pairKey}>
+                    <label className={`shared-duplicate-row${checked ? "" : " unchecked"}`}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleSharedItemPair(c.pairKey)} />
+                      <span className="shared-duplicate-pair">
+                        {[c.a, c.b].map((item) => (
+                          <span key={item.id} className="shared-duplicate-item">
+                            <span className="shared-duplicate-name">
+                              {item.name}
+                              {formatQuantity(item) && <span className="shared-duplicate-qty"> · {formatQuantity(item)}</span>}
+                            </span>
+                            <span className="shared-duplicate-source">{item.sourceRecipes.join(", ")}</span>
+                          </span>
+                        ))}
+                        <span className="shared-duplicate-hint">{checked ? "Combine into one line" : "Keep both"}</span>
+                      </span>
+                    </label>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="shared-duplicate-actions">
+              <button className="secondary-button primary-ish" onClick={resolveSharedItemDuplicates}>
+                Done
               </button>
             </div>
           </div>

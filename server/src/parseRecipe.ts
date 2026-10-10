@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { AISLES } from "./aisles.js";
+import { AISLES, AISLE_GUIDANCE } from "./aisles.js";
 import type { ParseRecipeResponse } from "./types.js";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -25,6 +25,7 @@ For each ingredient, normalize it into:
 - note: any qualifier worth keeping (e.g. "to taste", "diced", "room temperature", "ripe"), or null if none.
 - aisle: pick the SINGLE best match from this exact list (copy the string exactly):
 ${AISLES.map((a) => `  - "${a}"`).join("\n")}
+${AISLE_GUIDANCE}
 
 Also return recipeName: a short human name for the recipe/dish (from the page title/heading if visible, otherwise a
 reasonable short description like "Page recipe" or infer from the ingredients, e.g. "Chicken stir-fry").

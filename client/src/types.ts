@@ -3,13 +3,17 @@ export const AISLES = [
   "Bread & Grains",
   "Bulk Foods (Nuts, Spices, etc.)",
   "Dry Foods (Pasta, Rice, Legumes)",
+  "Breakfast & Cereal",
   "Cooking Oils & Nut Butters",
   "Baking",
   "Canned Foods",
+  "Condiments & Sauces",
   "Meat & Seafood",
+  "Deli",
   "International Foods",
   "Frozen Foods",
   "Dairy",
+  "Beverages",
   "Other",
 ] as const;
 
